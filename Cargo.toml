@@ -1,0 +1,19 @@
+[package]
+name = "paracord"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+boxcar = "0.2.9"
+papaya = "0.1.8"
+thread_local = "1.1.8"
+bumpalo = "3"
+foldhash = "0.1"
+
+[dev-dependencies]
+divan = "0.1.17"
+fastrand = "2"
+
+[[bench]]
+name = "paracord"
+harness = false
