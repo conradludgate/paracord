@@ -1,4 +1,4 @@
-use std::{alloc::Layout, hash::Hash, num::NonZeroU32};
+use std::{alloc::Layout, hash::Hash, num::NonZeroU32, thread::available_parallelism};
 
 use bumpalo::Bump;
 use foldhash::fast::RandomState;
@@ -8,11 +8,24 @@ use thread_local::ThreadLocal;
 
 mod short_string;
 
-#[derive(Default)]
 pub struct ParaCord {
     keys_to_strings: boxcar::Vec<ShortString>,
     strings_to_keys: papaya::HashMap<ShortString, u32, RandomState>,
     alloc: ThreadLocal<Bump>,
+}
+
+impl Default for ParaCord {
+    fn default() -> Self {
+        Self {
+            keys_to_strings: boxcar::Vec::default(),
+            strings_to_keys: papaya::HashMap::builder()
+                .resize_mode(papaya::ResizeMode::Incremental(512))
+                .collector(seize::Collector::new().epoch_frequency(None))
+                .hasher(RandomState::default())
+                .build(),
+            alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
@@ -36,9 +49,13 @@ impl ParaCord {
             let alloc = bump.alloc_layout(Layout::from_size_align_unchecked(len, 1));
             ShortString::encode_into(s, alloc.as_ptr())
         };
-        let key = self.keys_to_strings.push(s);
+
+        let key = self.keys_to_strings.push(s.clone());
         match self.strings_to_keys.try_insert(s, key as u32, &guard) {
             Ok(key) => Key(unsafe { NonZeroU32::new_unchecked(key + 1) }),
+            // TODO:
+            // how do we reclaim the space in bump,
+            // and additionally reclaim the ID in boxcar (a la slotmap?)
             Err(entry) => Key(unsafe { NonZeroU32::new_unchecked(entry.current + 1) }),
         }
     }

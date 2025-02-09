@@ -1,7 +1,10 @@
 [package]
 name = "paracord"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
+license = "Apache-2.0"
+description = "A fast, simple, multi-threaded string interning library"
+authors = ["Conrad Ludgate <conradludgate@gmail.com>"]
 
 [dependencies]
 boxcar = "0.2.9"
@@ -9,11 +12,18 @@ papaya = "0.1.8"
 thread_local = "1.1.8"
 bumpalo = "3"
 foldhash = "0.1"
+seize = "0.4"
 
 [dev-dependencies]
 divan = "0.1.17"
 fastrand = "2"
 
+lasso = { version = "0.7", features = ["multi-threaded"] }
+
 [[bench]]
 name = "paracord"
+harness = false
+
+[[bench]]
+name = "lasso"
 harness = false

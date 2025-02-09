@@ -1,15 +1,24 @@
+//! Small String hacks
+//!
+//! Instead of storing `(*u8, usize)` twice for each key in `ParaCord`,
+//! we can get away with just `*u8` (similar to a cstr).
+//! Dissimilar to a cstr, this is length-prefixed rather than null terminated.
+//!
+//! Since I only need to store small strings, I have a simple optimisation
+//! to use a single byte length prefix, with a nine byte prefix if long (255+ bytes)
+
 use std::hash::Hash;
 
 use papaya::Equivalent;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ShortString(*const u8);
 
 unsafe impl Sync for ShortString {}
 unsafe impl Send for ShortString {}
 
 impl ShortString {
-    pub(crate) unsafe fn as_str<'a>(self) -> &'a str {
+    pub(crate) unsafe fn as_str<'a>(&self) -> &'a str {
         let len = *self.0;
         let p = self.0.add(1);
         if len == 255 {
