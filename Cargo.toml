@@ -8,11 +8,11 @@ authors = ["Conrad Ludgate <conradludgate@gmail.com>"]
 
 [dependencies]
 boxcar = "0.2.9"
-papaya = "0.1.8"
 thread_local = "1.1.8"
 bumpalo = "3"
 foldhash = "0.1"
-seize = "0.4"
+clashmap = { version = "1.1", git = "https://github.com/conradludgate/clashmap", branch = "main" }
+hashbrown = { version = "0.15" }
 
 [dev-dependencies]
 divan = "0.1.17"

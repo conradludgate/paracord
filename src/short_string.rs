@@ -9,7 +9,7 @@
 
 use std::hash::Hash;
 
-use papaya::Equivalent;
+use hashbrown::Equivalent;
 
 #[derive(Clone)]
 pub(crate) struct ShortString(*const u8);
