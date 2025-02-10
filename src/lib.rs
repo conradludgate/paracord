@@ -1,24 +1,31 @@
-use std::{alloc::Layout, hash::Hash, num::NonZeroU32, thread::available_parallelism};
+use std::{
+    alloc::Layout,
+    hash::{BuildHasher, Hash},
+    num::NonZeroU32,
+    thread::available_parallelism,
+};
 
 use bumpalo::Bump;
-use clashmap::{ClashMap, EntryRef};
-use foldhash::fast::RandomState;
+use clashmap::{tableref::entry::Entry, ClashTable};
+use hashbrown::Equivalent;
 use short_string::ShortString;
 use thread_local::ThreadLocal;
 
 mod short_string;
 
-pub struct ParaCord {
+pub struct ParaCord<S = foldhash::fast::RandomState> {
     keys_to_strings: boxcar::Vec<ShortString>,
-    strings_to_keys: ClashMap<ShortString, u32, RandomState>,
+    strings_to_keys: ClashTable<(ShortString, u32)>,
+    hasher: S,
     alloc: ThreadLocal<Bump>,
 }
 
-impl Default for ParaCord {
+impl<S: Default + BuildHasher> Default for ParaCord<S> {
     fn default() -> Self {
         Self {
             keys_to_strings: boxcar::Vec::default(),
-            strings_to_keys: ClashMap::with_hasher(RandomState::default()),
+            strings_to_keys: ClashTable::new(),
+            hasher: S::default(),
             alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
         }
     }
@@ -39,20 +46,26 @@ impl Key {
 
 impl ParaCord {
     pub fn intern(&self, s: &str) -> Key {
-        if let Some(key) = self.strings_to_keys.get(s) {
-            return Key(unsafe { NonZeroU32::new_unchecked(*key + 1) });
+        let hash = self.hasher.hash_one(s);
+        if let Some(key) = self
+            .strings_to_keys
+            .find(hash, |k| unsafe { s.equivalent(k.0.as_str()) })
+        {
+            return Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) });
         }
 
-        self.intern_slow(s)
+        self.intern_slow(s, hash)
     }
 
     #[cold]
-    fn intern_slow(&self, s: &str) -> Key {
-        match self.strings_to_keys.entry_ref(s) {
-            EntryRef::Occupied(entry) => {
-                Key(unsafe { NonZeroU32::new_unchecked(*entry.get() + 1) })
-            }
-            EntryRef::Vacant(entry) => {
+    fn intern_slow(&self, s: &str, hash: u64) -> Key {
+        match self.strings_to_keys.entry(
+            hash,
+            |k| unsafe { s.equivalent(k.0.as_str()) },
+            |k| unsafe { self.hasher.hash_one(k.0.as_str()) },
+        ) {
+            Entry::Occupied(entry) => Key(unsafe { NonZeroU32::new_unchecked(entry.get().1 + 1) }),
+            Entry::Vacant(entry) => {
                 let len = ShortString::len_of(s);
                 let bump = self.alloc.get_or_default();
                 let s = unsafe {
@@ -61,9 +74,17 @@ impl ParaCord {
                 };
 
                 let key = self.keys_to_strings.push(s.clone());
-                Key(unsafe { NonZeroU32::new_unchecked(*entry.insert(s, key as u32).value() + 1) })
+                Key(unsafe {
+                    NonZeroU32::new_unchecked(entry.insert((s, key as u32)).value().1 + 1)
+                })
             }
         }
+    }
+
+    pub fn try_get(&self, key: Key) -> Option<&str> {
+        let key = key.0.get() - 1;
+        let s = self.keys_to_strings.get(key as usize)?;
+        unsafe { Some(s.as_str()) }
     }
 
     pub fn get(&self, key: Key) -> &str {

@@ -96,8 +96,8 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "clashmap"
-version = "1.1.0"
-source = "git+https://github.com/conradludgate/clashmap?branch=main#9dd8e64992860653d8a81aec19d2504185b50ab4"
+version = "1.1.1"
+source = "git+https://github.com/conradludgate/clashmap?branch=clashtable#13eb16625f79e230e97b67b85dc3b59042455317"
 dependencies = [
  "crossbeam-utils",
  "hashbrown 0.15.2",

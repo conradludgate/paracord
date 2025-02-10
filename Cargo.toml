@@ -11,7 +11,7 @@ boxcar = "0.2.9"
 thread_local = "1.1.8"
 bumpalo = "3"
 foldhash = "0.1"
-clashmap = { version = "1.1", git = "https://github.com/conradludgate/clashmap", branch = "main" }
+clashmap = { version = "1.1", git = "https://github.com/conradludgate/clashmap", branch = "clashtable" }
 hashbrown = { version = "0.15" }
 
 [dev-dependencies]
