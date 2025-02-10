@@ -1,5 +1,4 @@
 use std::{
-    alloc::Layout,
     hash::{BuildHasher, Hash},
     num::NonZeroU32,
     thread::available_parallelism,
@@ -7,15 +6,11 @@ use std::{
 
 use bumpalo::Bump;
 use clashmap::{tableref::entry::Entry, ClashTable};
-use hashbrown::Equivalent;
-use short_string::ShortString;
 use thread_local::ThreadLocal;
 
-mod short_string;
-
 pub struct ParaCord<S = foldhash::fast::RandomState> {
-    keys_to_strings: boxcar::Vec<ShortString>,
-    strings_to_keys: ClashTable<(ShortString, u32)>,
+    keys_to_strings: boxcar::Vec<*const str>,
+    strings_to_keys: ClashTable<(*const str, u32)>,
     hasher: S,
     alloc: ThreadLocal<Bump>,
 }
@@ -47,10 +42,7 @@ impl Key {
 impl ParaCord {
     pub fn intern(&self, s: &str) -> Key {
         let hash = self.hasher.hash_one(s);
-        if let Some(key) = self
-            .strings_to_keys
-            .find(hash, |k| unsafe { s.equivalent(k.0.as_str()) })
-        {
+        if let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) {
             return Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) });
         }
 
@@ -61,19 +53,14 @@ impl ParaCord {
     fn intern_slow(&self, s: &str, hash: u64) -> Key {
         match self.strings_to_keys.entry(
             hash,
-            |k| unsafe { s.equivalent(k.0.as_str()) },
-            |k| unsafe { self.hasher.hash_one(k.0.as_str()) },
+            |k| unsafe { s == &*k.0 },
+            |k| unsafe { self.hasher.hash_one(&*k.0) },
         ) {
             Entry::Occupied(entry) => Key(unsafe { NonZeroU32::new_unchecked(entry.get().1 + 1) }),
             Entry::Vacant(entry) => {
-                let len = ShortString::len_of(s);
                 let bump = self.alloc.get_or_default();
-                let s = unsafe {
-                    let alloc = bump.alloc_layout(Layout::from_size_align_unchecked(len, 1));
-                    ShortString::encode_into(s, alloc.as_ptr())
-                };
-
-                let key = self.keys_to_strings.push(s.clone());
+                let s = bump.alloc_str(s) as &str as *const str;
+                let key = self.keys_to_strings.push(s);
                 Key(unsafe {
                     NonZeroU32::new_unchecked(entry.insert((s, key as u32)).value().1 + 1)
                 })
@@ -84,12 +71,12 @@ impl ParaCord {
     pub fn try_get(&self, key: Key) -> Option<&str> {
         let key = key.0.get() - 1;
         let s = self.keys_to_strings.get(key as usize)?;
-        unsafe { Some(s.as_str()) }
+        unsafe { Some(&**s) }
     }
 
     pub fn get(&self, key: Key) -> &str {
         let key = key.0.get() - 1;
-        unsafe { self.keys_to_strings[key as usize].as_str() }
+        unsafe { &*self.keys_to_strings[key as usize] }
     }
 
     pub fn reset(&mut self) {
