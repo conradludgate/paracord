@@ -18,13 +18,13 @@ pub struct ParaCord<S = foldhash::fast::RandomState> {
 unsafe impl<S: Sync> Sync for ParaCord<S> {}
 unsafe impl<S: Send> Send for ParaCord<S> {}
 
-impl<S: Default + BuildHasher> Default for ParaCord<S> {
+impl Default for ParaCord {
     fn default() -> Self {
         Self {
             keys_to_strings: boxcar::Vec::default(),
             strings_to_keys: ClashTable::new(),
             alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
-            hasher: S::default(),
+            hasher: Default::default(),
         }
     }
 }
@@ -42,7 +42,7 @@ impl Key {
     }
 }
 
-impl ParaCord {
+impl<S: BuildHasher> ParaCord<S> {
     pub fn intern(&self, s: &str) -> Key {
         let hash = self.hasher.hash_one(s);
         if let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) {
