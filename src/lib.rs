@@ -27,6 +27,16 @@ impl Default for ParaCord {
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
 pub struct Key(NonZeroU32);
 
+impl Key {
+    pub fn into_repr(self) -> u32 {
+        self.0.get() - 1
+    }
+
+    pub fn try_from_repr(x: u32) -> Option<Self> {
+        NonZeroU32::new(x.checked_add(1)?).map(Self)
+    }
+}
+
 impl ParaCord {
     pub fn intern(&self, s: &str) -> Key {
         if let Some(key) = self.strings_to_keys.get(s) {
