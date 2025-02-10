@@ -11,17 +11,20 @@ use thread_local::ThreadLocal;
 pub struct ParaCord<S = foldhash::fast::RandomState> {
     keys_to_strings: boxcar::Vec<*const str>,
     strings_to_keys: ClashTable<(*const str, u32)>,
-    hasher: S,
     alloc: ThreadLocal<Bump>,
+    hasher: S,
 }
+
+unsafe impl<S: Sync> Sync for ParaCord<S> {}
+unsafe impl<S: Send> Send for ParaCord<S> {}
 
 impl<S: Default + BuildHasher> Default for ParaCord<S> {
     fn default() -> Self {
         Self {
             keys_to_strings: boxcar::Vec::default(),
             strings_to_keys: ClashTable::new(),
-            hasher: S::default(),
             alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
+            hasher: S::default(),
         }
     }
 }
