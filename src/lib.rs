@@ -43,13 +43,18 @@ impl Key {
 }
 
 impl<S: BuildHasher> ParaCord<S> {
-    pub fn intern(&self, s: &str) -> Key {
+    pub fn get(&self, s: &str) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
-        if let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) {
-            return Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) });
-        }
+        let key = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 })?;
+        Some(Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) }))
+    }
 
-        self.intern_slow(s, hash)
+    pub fn get_or_intern(&self, s: &str) -> Key {
+        let hash = self.hasher.hash_one(s);
+        let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) else {
+            return self.intern_slow(s, hash);
+        };
+        Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) })
     }
 
     #[cold]
@@ -71,15 +76,55 @@ impl<S: BuildHasher> ParaCord<S> {
         }
     }
 
-    pub fn try_get(&self, key: Key) -> Option<&str> {
+    pub fn get_or_intern_static(&self, s: &'static str) -> Key {
+        let hash = self.hasher.hash_one(s);
+        let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) else {
+            return self.intern_static_slow(s, hash);
+        };
+        Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) })
+    }
+
+    #[cold]
+    fn intern_static_slow(&self, s: &'static str, hash: u64) -> Key {
+        match self.strings_to_keys.entry(
+            hash,
+            |k| unsafe { s == &*k.0 },
+            |k| unsafe { self.hasher.hash_one(&*k.0) },
+        ) {
+            Entry::Occupied(entry) => Key(unsafe { NonZeroU32::new_unchecked(entry.get().1 + 1) }),
+            Entry::Vacant(entry) => {
+                let s = s as *const str;
+                let key = self.keys_to_strings.push(s);
+                Key(unsafe {
+                    NonZeroU32::new_unchecked(entry.insert((s, key as u32)).value().1 + 1)
+                })
+            }
+        }
+    }
+
+    pub fn try_resolve(&self, key: Key) -> Option<&str> {
         let key = key.0.get() - 1;
         let s = self.keys_to_strings.get(key as usize)?;
         unsafe { Some(&**s) }
     }
 
-    pub fn get(&self, key: Key) -> &str {
+    pub fn resolve(&self, key: Key) -> &str {
         let key = key.0.get() - 1;
         unsafe { &*self.keys_to_strings[key as usize] }
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys_to_strings.count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys_to_strings.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
+        self.keys_to_strings
+            .iter()
+            .map(|(key, s)| unsafe { (Key(NonZeroU32::new_unchecked(key as u32 + 1)), &**s) })
     }
 
     pub fn reset(&mut self) {
@@ -97,13 +142,13 @@ mod tests {
     fn works() {
         let paracord = ParaCord::default();
 
-        let foo = paracord.intern("foo");
-        let bar = paracord.intern("bar");
-        let foo2 = paracord.intern("foo");
+        let foo = paracord.get_or_intern("foo");
+        let bar = paracord.get_or_intern("bar");
+        let foo2 = paracord.get_or_intern("foo");
 
         assert_eq!(foo, foo2);
         assert_ne!(foo, bar);
-        assert_eq!(paracord.get(foo), "foo");
-        assert_eq!(paracord.get(bar), "bar");
+        assert_eq!(paracord.resolve(foo), "foo");
+        assert_eq!(paracord.resolve(bar), "bar");
     }
 }

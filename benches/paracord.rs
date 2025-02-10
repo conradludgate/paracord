@@ -10,37 +10,37 @@ fn main() {
 }
 
 #[divan::bench]
-fn insert(b: Bencher) {
+fn get_or_intern(b: Bencher) {
     let p = ParaCord::default();
     b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
         .bench_local_refs(|s| {
-            black_box_drop(p.intern(s));
-        });
-}
-
-#[divan::bench]
-fn insert_existing(b: Bencher) {
-    let p = ParaCord::default();
-    for x in 100000..=999999 {
-        p.intern(&x.to_string());
-    }
-
-    b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_local_refs(|s| {
-            black_box_drop(p.intern(s));
+            black_box_drop(p.get_or_intern(s));
         });
 }
 
 #[divan::bench]
 fn get(b: Bencher) {
     let p = ParaCord::default();
+    for x in 100000..=999999 {
+        p.get_or_intern(&x.to_string());
+    }
+
+    b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
+        .bench_local_refs(|s| {
+            black_box_drop(p.get(s).unwrap());
+        });
+}
+
+#[divan::bench]
+fn resolve(b: Bencher) {
+    let p = ParaCord::default();
     let mut keys = vec![];
     for x in 100000..=999999 {
-        keys.push(p.intern(&x.to_string()));
+        keys.push(p.get_or_intern(&x.to_string()));
     }
 
     b.with_inputs(|| fastrand::choice(&keys).unwrap())
         .bench_local_refs(|key| {
-            black_box_drop(p.get(**key));
+            black_box_drop(p.resolve(**key));
         });
 }

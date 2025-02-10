@@ -11,21 +11,8 @@ fn main() {
 }
 
 #[divan::bench]
-fn insert(b: Bencher) {
+fn get_or_intern(b: Bencher) {
     let p = ThreadedRodeo::<Spur, RandomState>::with_hasher(RandomState::default());
-    b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_local_refs(|s| {
-            black_box_drop(p.get_or_intern(s));
-        });
-}
-
-#[divan::bench]
-fn insert_existing(b: Bencher) {
-    let p = ThreadedRodeo::<Spur, RandomState>::with_hasher(RandomState::default());
-    for x in 100000..=999999 {
-        p.get_or_intern(x.to_string());
-    }
-
     b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
         .bench_local_refs(|s| {
             black_box_drop(p.get_or_intern(s));
@@ -34,6 +21,19 @@ fn insert_existing(b: Bencher) {
 
 #[divan::bench]
 fn get(b: Bencher) {
+    let p = ThreadedRodeo::<Spur, RandomState>::with_hasher(RandomState::default());
+    for x in 100000..=999999 {
+        p.get_or_intern(x.to_string());
+    }
+
+    b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
+        .bench_local_refs(|s| {
+            black_box_drop(p.get(s).unwrap());
+        });
+}
+
+#[divan::bench]
+fn resolve(b: Bencher) {
     let p = ThreadedRodeo::<Spur, RandomState>::with_hasher(RandomState::default());
     let mut keys = vec![];
     for x in 100000..=999999 {
