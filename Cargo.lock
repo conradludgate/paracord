@@ -97,7 +97,8 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 [[package]]
 name = "clashmap"
 version = "1.1.1"
-source = "git+https://github.com/conradludgate/clashmap?branch=main#5a4ca21c3926d2a85d86ff4e678020b9123ccf20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38aa080f40375aed3130e3f3fdd88060df011c3f6a75b32a60b619cdaf89a6d7"
 dependencies = [
  "crossbeam-utils",
  "hashbrown 0.15.2",
