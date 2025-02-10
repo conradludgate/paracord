@@ -105,6 +105,7 @@ dependencies = [
  "parking_lot_core",
  "polonius-the-crab",
  "replace_with",
+ "typesize",
 ]
 
 [[package]]
@@ -330,6 +331,7 @@ dependencies = [
  "foldhash",
  "lasso",
  "thread_local",
+ "typesize",
 ]
 
 [[package]]
@@ -568,6 +570,26 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "typesize"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20304d891be0766f52123746c721d1190b953e874f9eccf29067a64c1a0ae16c"
+dependencies = [
+ "typesize-derive",
+]
+
+[[package]]
+name = "typesize-derive"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "536b6812192bda8551cfa0e52524e328c6a951b48e66529ee4522d6c721243d6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

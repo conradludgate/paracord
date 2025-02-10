@@ -7,10 +7,11 @@ use std::{
 use bumpalo::Bump;
 use clashmap::{tableref::entry::Entry, ClashTable};
 use thread_local::ThreadLocal;
+use typesize::TypeSize;
 
 pub struct ParaCord<S = foldhash::fast::RandomState> {
     keys_to_strings: boxcar::Vec<*const str>,
-    strings_to_keys: ClashTable<(*const str, u32)>,
+    strings_to_keys: ClashTable<Inner>,
     alloc: ThreadLocal<Bump>,
     hasher: S,
 }
@@ -28,6 +29,9 @@ impl Default for ParaCord {
         }
     }
 }
+
+pub struct Inner(*const str, u32);
+impl TypeSize for Inner {}
 
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
 pub struct Key(NonZeroU32);
@@ -70,7 +74,7 @@ impl<S: BuildHasher> ParaCord<S> {
                 let s = bump.alloc_str(s) as &str as *const str;
                 let key = self.keys_to_strings.push(s);
                 Key(unsafe {
-                    NonZeroU32::new_unchecked(entry.insert((s, key as u32)).value().1 + 1)
+                    NonZeroU32::new_unchecked(entry.insert(Inner(s, key as u32)).value().1 + 1)
                 })
             }
         }
@@ -96,7 +100,7 @@ impl<S: BuildHasher> ParaCord<S> {
                 let s = s as *const str;
                 let key = self.keys_to_strings.push(s);
                 Key(unsafe {
-                    NonZeroU32::new_unchecked(entry.insert((s, key as u32)).value().1 + 1)
+                    NonZeroU32::new_unchecked(entry.insert(Inner(s, key as u32)).value().1 + 1)
                 })
             }
         }
@@ -131,6 +135,17 @@ impl<S: BuildHasher> ParaCord<S> {
         self.keys_to_strings.clear();
         self.strings_to_keys.clear();
         self.alloc.iter_mut().for_each(|b| b.reset());
+    }
+
+    pub fn current_memory_usage(&mut self) -> usize {
+        use typesize::TypeSize;
+        self.keys_to_strings.count() * size_of::<*const str>()
+            + self.strings_to_keys.get_size()
+            + self
+                .alloc
+                .iter_mut()
+                .map(|b| b.iter_allocated_chunks().map(|c| c.len()).sum::<usize>())
+                .sum::<usize>()
     }
 }
 
