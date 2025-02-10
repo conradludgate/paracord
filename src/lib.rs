@@ -1,3 +1,10 @@
+#![warn(
+    unsafe_op_in_unsafe_fn,
+    clippy::missing_safety_doc,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::undocumented_unsafe_blocks
+)]
+
 use std::{
     hash::{BuildHasher, Hash},
     num::NonZeroU32,
@@ -11,7 +18,6 @@ use clashmap::{
     ClashTable,
 };
 use thread_local::ThreadLocal;
-use typesize::TypeSize;
 
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
 pub struct Key(NonZeroU32);
@@ -24,25 +30,32 @@ impl Key {
     pub fn try_from_repr(x: u32) -> Option<Self> {
         NonZeroU32::new(x.checked_add(1)?).map(Self)
     }
+
+    /// Safety: i must be less than u32::MAX
+    unsafe fn new_unchecked(i: u32) -> Self {
+        // SAFETY: from caller
+        Key(unsafe { NonZeroU32::new_unchecked(i + 1) })
+    }
 }
 
-pub struct Inner(*const str, u32);
-impl TypeSize for Inner {}
-
 pub struct ParaCord<S = foldhash::fast::RandomState> {
-    keys_to_strings: boxcar::Vec<*const str>,
-    strings_to_keys: ClashTable<Inner>,
+    keys_to_strings: boxcar::Vec<&'static str>,
+    strings_to_keys: ClashTable<(typesize::Ref<'static, str>, u32)>,
     alloc: ThreadLocal<Bump>,
     hasher: S,
 }
-
-unsafe impl<S: Sync> Sync for ParaCord<S> {}
-unsafe impl<S: Send> Send for ParaCord<S> {}
 
 impl Default for ParaCord {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
+}
+
+fn assert_key(key: usize) -> u32 {
+    if usize::BITS >= 32 {
+        assert!(key < u32::MAX as usize);
+    }
+    key as u32
 }
 
 impl<S: BuildHasher> ParaCord<S> {
@@ -57,59 +70,91 @@ impl<S: BuildHasher> ParaCord<S> {
 
     pub fn get(&self, s: &str) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
-        let key = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 })?;
-        Some(Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) }))
+        let key = self.strings_to_keys.find(hash, |k| s == &*k.0)?;
+        // SAFETY: we assume the key is correct given its existence in the set
+        Some(unsafe { Key::new_unchecked(key.1) })
     }
 
     pub fn get_or_intern(&self, s: &str) -> Key {
         let hash = self.hasher.hash_one(s);
-        let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) else {
+        let Some(key) = self.strings_to_keys.find(hash, |k| s == &*k.0) else {
             return self.intern_slow(s, hash);
         };
-        Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) })
+        // SAFETY: we assume the key is correct given its existence in the set
+        unsafe { Key::new_unchecked(key.1) }
     }
 
     #[cold]
     fn intern_slow(&self, s: &str, hash: u64) -> Key {
-        match self.strings_to_keys.entry(
-            hash,
-            |k| unsafe { s == &*k.0 },
-            |k| unsafe { self.hasher.hash_one(&*k.0) },
-        ) {
-            Entry::Occupied(entry) => Key(unsafe { NonZeroU32::new_unchecked(entry.get().1 + 1) }),
+        match self
+            .strings_to_keys
+            .entry(hash, |k| s == &*k.0, |k| self.hasher.hash_one(&*k.0))
+        {
+            // SAFETY: we assume the key is correct given its existence in the set
+            Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
             Entry::Vacant(entry) => {
                 let bump = self.alloc.get_or_default();
-                let s = bump.alloc_str(s) as &str as *const str;
+                let s = bump.alloc_str(s);
+                // SAFETY: we will not drop bump until we drop the containers storing these `&'static str`.
+                let s = unsafe { &*(s as &str as *const str) };
                 let key = self.keys_to_strings.push(s);
-                Key(unsafe {
-                    NonZeroU32::new_unchecked(entry.insert(Inner(s, key as u32)).value().1 + 1)
-                })
+                let key = assert_key(key);
+                entry.insert((typesize::Ref(s), key));
+
+                // SAFETY: as asserted the key is correct
+                unsafe { Key::new_unchecked(key) }
+            }
+        }
+    }
+
+    #[cold]
+    fn intern_slow_mut(&mut self, s: &str, hash: u64) -> Key {
+        match self
+            .strings_to_keys
+            .entry_mut(hash, |k| s == &*k.0, |k| self.hasher.hash_one(&*k.0))
+        {
+            // SAFETY: we assume the key is correct given its existence in the set
+            EntryMut::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
+            EntryMut::Vacant(entry) => {
+                let bump = self.alloc.get_or_default();
+                let s = bump.alloc_str(s);
+                // SAFETY: we will not drop bump until we drop the containers storing these `&'static str`.
+                let s = unsafe { &*(s as &str as *const str) };
+
+                let key = self.keys_to_strings.push(s);
+                let key = assert_key(key);
+                entry.insert((typesize::Ref(s), key));
+
+                // SAFETY: as asserted the key is correct
+                unsafe { Key::new_unchecked(key) }
             }
         }
     }
 
     pub fn get_or_intern_static(&self, s: &'static str) -> Key {
         let hash = self.hasher.hash_one(s);
-        let Some(key) = self.strings_to_keys.find(hash, |k| unsafe { s == &*k.0 }) else {
+        let Some(key) = self.strings_to_keys.find(hash, |k| s == &*k.0) else {
             return self.intern_static_slow(s, hash);
         };
-        Key(unsafe { NonZeroU32::new_unchecked(key.1 + 1) })
+        // SAFETY: we assume the key is correct given its existence in the set
+        unsafe { Key::new_unchecked(key.1) }
     }
 
     #[cold]
     fn intern_static_slow(&self, s: &'static str, hash: u64) -> Key {
-        match self.strings_to_keys.entry(
-            hash,
-            |k| unsafe { s == &*k.0 },
-            |k| unsafe { self.hasher.hash_one(&*k.0) },
-        ) {
-            Entry::Occupied(entry) => Key(unsafe { NonZeroU32::new_unchecked(entry.get().1 + 1) }),
+        match self
+            .strings_to_keys
+            .entry(hash, |k| s == &*k.0, |k| self.hasher.hash_one(&*k.0))
+        {
+            // SAFETY: we assume the key is correct given its existence in the set
+            Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
             Entry::Vacant(entry) => {
-                let s = s as *const str;
                 let key = self.keys_to_strings.push(s);
-                Key(unsafe {
-                    NonZeroU32::new_unchecked(entry.insert(Inner(s, key as u32)).value().1 + 1)
-                })
+                let key = assert_key(key);
+                entry.insert((typesize::Ref(s), key));
+
+                // SAFETY: as asserted the key is correct
+                unsafe { Key::new_unchecked(key) }
             }
         }
     }
@@ -117,12 +162,12 @@ impl<S: BuildHasher> ParaCord<S> {
     pub fn try_resolve(&self, key: Key) -> Option<&str> {
         let key = key.0.get() - 1;
         let s = self.keys_to_strings.get(key as usize)?;
-        unsafe { Some(&**s) }
+        Some(*s)
     }
 
     pub fn resolve(&self, key: Key) -> &str {
         let key = key.0.get() - 1;
-        unsafe { &*self.keys_to_strings[key as usize] }
+        self.keys_to_strings[key as usize]
     }
 
     pub fn len(&self) -> usize {
@@ -136,7 +181,8 @@ impl<S: BuildHasher> ParaCord<S> {
     pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
         self.keys_to_strings
             .iter()
-            .map(|(key, s)| unsafe { (Key(NonZeroU32::new_unchecked(key as u32 + 1)), &**s) })
+            // SAFETY: we assume the key is correct given its existence in the set
+            .map(|(key, s)| unsafe { (Key::new_unchecked(key as u32), &**s) })
     }
 
     pub fn reset(&mut self) {
@@ -175,24 +221,11 @@ impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for ParaCord<S> {
 
 impl<I: AsRef<str>, S: BuildHasher> Extend<I> for ParaCord<S> {
     fn extend<T: IntoIterator<Item = I>>(&mut self, iter: T) {
-        let bump = self.alloc.get_or_default();
-
         // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
         for s in iter {
             let s = s.as_ref();
             let hash = self.hasher.hash_one(s);
-            match self.strings_to_keys.entry_mut(
-                hash,
-                |k| unsafe { s == &*k.0 },
-                |k| unsafe { self.hasher.hash_one(&*k.0) },
-            ) {
-                EntryMut::Occupied(_) => continue,
-                EntryMut::Vacant(entry) => {
-                    let s = bump.alloc_str(s) as &str as *const str;
-                    let key = self.keys_to_strings.push(s);
-                    entry.insert(Inner(s, key as u32));
-                }
-            }
+            self.intern_slow_mut(s, hash);
         }
     }
 }
