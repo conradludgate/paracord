@@ -29,6 +29,86 @@ use std::{
 /// Support for interning more than just string slices
 pub mod slice;
 
+#[doc(hidden)]
+pub mod __private {
+    pub use foldhash::fast::RandomState;
+}
+
+/// Create a new custom key, with a static-backed allocator.
+#[macro_export]
+macro_rules! custom_key {
+    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident) => {
+        $crate::custom_key!($(#[$($meta)*])* $vis struct $key; let hasher: $crate::__private::RandomState);
+    };
+    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty) => {
+        $crate::custom_key!($(#[$($meta)*])* $vis struct $key; let hasher: $s = <$s as ::core::default::Default>::default());
+    };
+    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty = $init:expr) => {
+        $(#[$($meta)*])*
+        #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
+        #[repr(transparent)]
+        $vis struct $key($crate::Key);
+
+        impl $key {
+            fn paracord() -> &'static $crate::ParaCord<$s> {
+                static S: ::std::sync::OnceLock<$crate::ParaCord<$s>> = ::std::sync::OnceLock::new();
+                S.get_or_init(|| $crate::ParaCord::with_hasher($init))
+            }
+
+            /// Try and get the key associated with the given string.
+            /// Returns [`None`] if not found.
+            pub fn get(s: &str) -> Option<Self> {
+                Self::paracord().get(s).map(Self)
+            }
+
+            /// Try and get the key associated with the given string.
+            /// Allocates a new key if not found.
+            pub fn get_or_intern(s: &str) -> Self {
+                Self(Self::paracord().get_or_intern(s))
+            }
+
+            /// Try and get the key associated with the given string.
+            /// Allocates a new key if not found.
+            ///
+            /// Unlike
+            #[doc = concat!("[`",stringify!($key),"::get_or_intern`],")]
+            /// this function does not need to also allocate the string.
+            pub fn get_or_intern_static(s: &'static str) -> Self {
+                Self(Self::paracord().get_or_intern_static(s))
+            }
+
+            /// Resolve the string associated with this key.
+            pub fn resolve(self) -> &'static str {
+                Self::paracord().resolve(self.0)
+            }
+
+            /// Determine how many strings have been allocated
+            pub fn len() -> usize {
+                Self::paracord().len()
+            }
+
+            /// Determine if no strings have been allocated
+            pub fn is_empty() -> bool {
+                Self::paracord().is_empty()
+            }
+
+            /// Get an iterator over every (key, `&str`)
+            #[doc = concat!("(`",stringify!($key),", `&str`)")]
+            /// pair that has been allocated in this [`ParaCord`] instance.
+            pub fn iter() -> impl Iterator<Item = (Self, &'static str)> {
+                Self::paracord().iter().map(|(k, s)| (Self(k), s))
+            }
+        }
+    };
+}
+
+custom_key!(
+    /// A key that allocates in a global [`ParaCord`] instance.
+    ///
+    /// Custom global keys can be defined using [`custom_key`]
+    pub struct DefaultKey
+);
+
 /// Key type returned by [`ParaCord`].
 ///
 /// [`Key`] implements [`core::cmp::Ord`] for use within collections like [`BTreeMap`](std::collections::BTreeMap),
@@ -141,6 +221,19 @@ impl<S: BuildHasher> ParaCord<S> {
     pub fn resolve(&self, key: Key) -> &str {
         // Safety: we insert only strings, so it's valid utf8
         unsafe { core::str::from_utf8_unchecked(self.inner.resolve(key)) }
+    }
+
+    /// Resolve the string associated with this [`Key`].
+    ///
+    /// # Safety
+    /// This key must have been allocated in this paracord instance,
+    /// and [`ParaCord::reset`] must not have been called.
+    pub unsafe fn resolve_unchecked(&self, key: Key) -> &str {
+        // Safety: from caller.
+        let b = unsafe { self.inner.resolve_unchecked(key) };
+
+        // Safety: we insert only strings, so it's valid utf8
+        unsafe { core::str::from_utf8_unchecked(b) }
     }
 
     /// Determine how many strings have been allocated

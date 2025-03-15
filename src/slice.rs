@@ -184,6 +184,16 @@ impl<T: 'static + Send + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
         self.keys_to_slice[key.into_repr() as usize]
     }
 
+    /// Resolve the slice associated with this [`Key`].
+    ///
+    /// # Safety
+    /// This key must have been allocated in this paracord instance,
+    /// and [`ParaCord::reset`] must not have been called.
+    pub unsafe fn resolve_unchecked(&self, key: Key) -> &[T] {
+        // Safety: If the key was allocated in self, then key is inbounds.
+        unsafe { self.keys_to_slice.get_unchecked(key.into_repr() as usize) }
+    }
+
     /// Determine how many slices have been allocated
     pub fn len(&self) -> usize {
         self.keys_to_slice.count()
