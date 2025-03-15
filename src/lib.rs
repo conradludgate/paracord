@@ -35,15 +35,68 @@ pub mod __private {
 }
 
 /// Create a new custom key, with a static-backed allocator.
+///
+/// See [`DefaultKey`] for docs on what this macro generates.
+///
+/// ## Create a custom key
+///
+/// ```
+/// paracord::custom_key!(
+///     /// My custom key
+///     pub struct MyKey;
+/// );
+///
+/// let key = MyKey::get_or_intern("foo");
+/// assert_eq!(key.resolve(), "foo");
+///
+/// let key2 = MyKey::get("foo").unwrap();
+/// assert_eq!(key, key2);
+/// ```
+///
+/// ## Create a custom key with a different default hasher
+///
+/// ```
+/// use foldhash::quality::RandomState;
+///
+/// paracord::custom_key!(
+///     /// My custom key
+///     pub struct MyKey;
+///
+///     let hasher: RandomState;
+/// );
+/// ```
+///
+/// ## Create a custom key with a different hasher and init function
+///
+/// ```
+/// use foldhash::quality::FixedState;
+///
+/// paracord::custom_key!(
+///     /// My custom key
+///     pub struct MyKey;
+///
+///     let hasher: FixedState = FixedState::with_seed(1);
+/// );
+/// ```
 #[macro_export]
 macro_rules! custom_key {
-    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident) => {
-        $crate::custom_key!($(#[$($meta)*])* $vis struct $key; let hasher: $crate::__private::RandomState);
+    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident $(;)?) => {
+        $crate::custom_key!(
+            $(#[$($meta)*])*
+            $vis struct $key;
+
+            let hasher: $crate::__private::RandomState;
+        );
     };
-    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty) => {
-        $crate::custom_key!($(#[$($meta)*])* $vis struct $key; let hasher: $s = <$s as ::core::default::Default>::default());
+    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty $(;)?) => {
+        $crate::custom_key!(
+            $(#[$($meta)*])*
+            $vis struct $key;
+
+            let hasher: $s = <$s as ::core::default::Default>::default();
+        );
     };
-    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty = $init:expr) => {
+    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty = $init:expr $(;)?) => {
         $(#[$($meta)*])*
         #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
         #[repr(transparent)]
@@ -92,8 +145,8 @@ macro_rules! custom_key {
                 Self::paracord().is_empty()
             }
 
-            /// Get an iterator over every (key, `&str`)
-            #[doc = concat!("(`",stringify!($key),", `&str`)")]
+            /// Get an iterator over every
+            #[doc = concat!("(`",stringify!($key),"`, `&str`)")]
             /// pair that has been allocated in this [`ParaCord`] instance.
             pub fn iter() -> impl Iterator<Item = (Self, &'static str)> {
                 Self::paracord().iter().map(|(k, s)| (Self(k), s))
@@ -106,7 +159,7 @@ custom_key!(
     /// A key that allocates in a global [`ParaCord`] instance.
     ///
     /// Custom global keys can be defined using [`custom_key`]
-    pub struct DefaultKey
+    pub struct DefaultKey;
 );
 
 /// Key type returned by [`ParaCord`].
