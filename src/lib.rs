@@ -24,15 +24,10 @@ use std::{
     hash::{BuildHasher, Hash},
     num::NonZeroU32,
     ops::Index,
-    thread::available_parallelism,
 };
 
-use bumpalo::Bump;
-use clashmap::{
-    tableref::{entry::Entry, entrymut::EntryMut},
-    ClashTable,
-};
-use thread_local::ThreadLocal;
+/// Support for interning more than just string slices
+pub mod slice;
 
 /// Key type returned by [`ParaCord`].
 ///
@@ -88,10 +83,7 @@ impl Key {
 /// This string interner is not garbage collected, so strings that are allocated in the interner are not released
 /// until the [`ParaCord`] instance is dropped.
 pub struct ParaCord<S = foldhash::fast::RandomState> {
-    keys_to_strings: boxcar::Vec<&'static str>,
-    strings_to_keys: ClashTable<(typesize::Ref<'static, str>, u32)>,
-    alloc: ThreadLocal<Bump>,
-    hasher: S,
+    inner: slice::ParaCord<u8, S>,
 }
 
 impl Default for ParaCord {
@@ -100,90 +92,24 @@ impl Default for ParaCord {
     }
 }
 
-fn assert_key(key: usize) -> u32 {
-    if usize::BITS >= 32 {
-        assert!(key < u32::MAX as usize);
-    }
-    key as u32
-}
-
 impl<S: BuildHasher> ParaCord<S> {
     /// Create a new `ParaCord` instance with the given hasher state.
     pub fn with_hasher(hasher: S) -> Self {
         Self {
-            keys_to_strings: boxcar::Vec::default(),
-            strings_to_keys: ClashTable::new(),
-            alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
-            hasher,
+            inner: slice::ParaCord::with_hasher(hasher),
         }
     }
 
     /// Try and get the [`Key`] associated with the given string.
     /// Returns [`None`] if not found.
     pub fn get(&self, s: &str) -> Option<Key> {
-        let hash = self.hasher.hash_one(s);
-        let key = self.strings_to_keys.find(hash, |k| s == &*k.0)?;
-        // SAFETY: we assume the key is correct given its existence in the set
-        Some(unsafe { Key::new_unchecked(key.1) })
+        self.inner.get(s.as_bytes())
     }
 
     /// Try and get the [`Key`] associated with the given string.
     /// Allocates a new key if not found.
     pub fn get_or_intern(&self, s: &str) -> Key {
-        let hash = self.hasher.hash_one(s);
-        let Some(key) = self.strings_to_keys.find(hash, |k| s == &*k.0) else {
-            return self.intern_slow(s, hash);
-        };
-        // SAFETY: we assume the key is correct given its existence in the set
-        unsafe { Key::new_unchecked(key.1) }
-    }
-
-    #[cold]
-    fn intern_slow(&self, s: &str, hash: u64) -> Key {
-        match self
-            .strings_to_keys
-            .entry(hash, |k| s == &*k.0, |k| self.hasher.hash_one(&*k.0))
-        {
-            // SAFETY: we assume the key is correct given its existence in the set
-            Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
-            Entry::Vacant(entry) => {
-                let bump = self.alloc.get_or_default();
-
-                // SAFETY: we will not drop bump until we drop the containers storing these `&'static str`.
-                let s = unsafe { &*(bump.alloc_str(s) as &str as *const str) };
-
-                let key = self.keys_to_strings.push(s);
-                let key = assert_key(key);
-                entry.insert((typesize::Ref(s), key));
-
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key) }
-            }
-        }
-    }
-
-    #[cold]
-    fn intern_slow_mut(&mut self, s: &str, hash: u64) -> Key {
-        match self
-            .strings_to_keys
-            .entry_mut(hash, |k| s == &*k.0, |k| self.hasher.hash_one(&*k.0))
-        {
-            // SAFETY: we assume the key is correct given its existence in the set
-            EntryMut::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
-            EntryMut::Vacant(entry) => {
-                let bump = self.alloc.get_or_default();
-                let s = bump.alloc_str(s);
-                // SAFETY: we will not drop bump until we drop the containers storing these `&'static str`.
-                let s = unsafe { &*(s as &str as *const str) };
-
-                let key = self.keys_to_strings.push(s);
-                let key = assert_key(key);
-                entry.insert((typesize::Ref(s), key));
-
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key) }
-            }
-        }
+        self.inner.get_or_intern(s.as_bytes())
     }
 
     /// Try and get the [`Key`] associated with the given string.
@@ -191,31 +117,7 @@ impl<S: BuildHasher> ParaCord<S> {
     ///
     /// Unlike [`ParaCord::get_or_intern`], this function does not need to also allocate the string.
     pub fn get_or_intern_static(&self, s: &'static str) -> Key {
-        let hash = self.hasher.hash_one(s);
-        let Some(key) = self.strings_to_keys.find(hash, |k| s == &*k.0) else {
-            return self.intern_static_slow(s, hash);
-        };
-        // SAFETY: we assume the key is correct given its existence in the set
-        unsafe { Key::new_unchecked(key.1) }
-    }
-
-    #[cold]
-    fn intern_static_slow(&self, s: &'static str, hash: u64) -> Key {
-        match self
-            .strings_to_keys
-            .entry(hash, |k| s == &*k.0, |k| self.hasher.hash_one(&*k.0))
-        {
-            // SAFETY: we assume the key is correct given its existence in the set
-            Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
-            Entry::Vacant(entry) => {
-                let key = self.keys_to_strings.push(s);
-                let key = assert_key(key);
-                entry.insert((typesize::Ref(s), key));
-
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key) }
-            }
-        }
+        self.inner.get_or_intern_static(s.as_bytes())
     }
 
     /// Try and resolve the string associated with this [`Key`].
@@ -224,8 +126,10 @@ impl<S: BuildHasher> ParaCord<S> {
     /// a different [`ParaCord`] instance, but it might return an arbitrary string
     /// as well.
     pub fn try_resolve(&self, key: Key) -> Option<&str> {
-        let s = self.keys_to_strings.get(key.into_repr() as usize)?;
-        Some(*s)
+        self.inner
+            .try_resolve(key)
+            // Safety: we insert only strings, so it's valid utf8
+            .map(|s| unsafe { core::str::from_utf8_unchecked(s) })
     }
 
     /// Resolve the string associated with this [`Key`].
@@ -235,73 +139,37 @@ impl<S: BuildHasher> ParaCord<S> {
     /// a different [`ParaCord`] instance, but it might return an arbitrary string
     /// as well.
     pub fn resolve(&self, key: Key) -> &str {
-        self.keys_to_strings[key.into_repr() as usize]
+        // Safety: we insert only strings, so it's valid utf8
+        unsafe { core::str::from_utf8_unchecked(self.inner.resolve(key)) }
     }
 
     /// Determine how many strings have been allocated
     pub fn len(&self) -> usize {
-        self.keys_to_strings.count()
+        self.inner.len()
     }
 
     /// Determine if no strings have been allocated
     pub fn is_empty(&self) -> bool {
-        self.keys_to_strings.is_empty()
+        self.inner.is_empty()
     }
 
     /// Get an iterator over every ([`Key`], [`&str`]) pair
     /// that has been allocated in this [`ParaCord`] instance.
     pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
-        self.keys_to_strings
+        self.inner
             .iter()
-            // SAFETY: we assume the key is correct given its existence in the set
-            .map(|(key, s)| unsafe { (Key::new_unchecked(key as u32), &**s) })
+            // Safety: we insert only strings, so it's valid utf8
+            .map(|(key, s)| unsafe { (key, core::str::from_utf8_unchecked(s)) })
     }
 
     /// Deallocate all interned strings, but can retain some allocated memory
     pub fn reset(&mut self) {
-        self.keys_to_strings.clear();
-        self.strings_to_keys.clear();
-        self.alloc.iter_mut().for_each(|b| b.reset());
+        self.inner.reset();
     }
 
     /// Determine how much space has been used to allocate all the strings.
     pub fn current_memory_usage(&mut self) -> usize {
-        use typesize::TypeSize;
-        size_of::<Self>()
-            + self.keys_to_strings.count() * size_of::<*const str>()
-            + self.strings_to_keys.extra_size()
-            + self
-                .alloc
-                .iter_mut()
-                .map(|b| b.iter_allocated_chunks().map(|c| c.len()).sum::<usize>())
-                .sum::<usize>()
-    }
-}
-
-impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for ParaCord<S> {
-    fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
-        let iter = iter.into_iter();
-        let len = iter.size_hint().0;
-
-        let mut this = Self {
-            keys_to_strings: boxcar::Vec::with_capacity(len),
-            strings_to_keys: ClashTable::with_capacity(len),
-            alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
-            hasher: S::default(),
-        };
-        this.extend(iter);
-        this
-    }
-}
-
-impl<I: AsRef<str>, S: BuildHasher> Extend<I> for ParaCord<S> {
-    fn extend<T: IntoIterator<Item = I>>(&mut self, iter: T) {
-        // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
-        for s in iter {
-            let s = s.as_ref();
-            let hash = self.hasher.hash_one(s);
-            self.intern_slow_mut(s, hash);
-        }
+        self.inner.current_memory_usage()
     }
 }
 
