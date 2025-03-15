@@ -132,7 +132,9 @@ macro_rules! custom_key {
 
             /// Resolve the string associated with this key.
             pub fn resolve(self) -> &'static str {
-                Self::paracord().resolve(self.0)
+                // Safety: The key can only be constructed from the static paracord,
+                // and the paracord will never be reset.
+                unsafe { Self::paracord().resolve_unchecked(self.0) }
             }
 
             /// Determine how many strings have been allocated
