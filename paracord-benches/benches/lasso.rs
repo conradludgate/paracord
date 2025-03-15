@@ -40,7 +40,7 @@ fn resolve(b: Bencher) {
         keys.push(p.get_or_intern(x.to_string()));
     }
 
-    b.with_inputs(|| fastrand::choice(&keys).unwrap())
+    b.with_inputs(|| *fastrand::choice(&keys).unwrap())
         .bench_local_refs(|key| {
             black_box_drop(p.resolve(key));
         });

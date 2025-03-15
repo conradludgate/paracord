@@ -13,11 +13,20 @@ foldhash = "0.1"
 
 paracord = { path = "../paracord" }
 lasso = { version = "0.7", features = ["multi-threaded"] }
+ustr = "1.1.0"
 
 [[bench]]
 name = "paracord"
 harness = false
 
 [[bench]]
+name = "paracord_global"
+harness = false
+
+[[bench]]
 name = "lasso"
+harness = false
+
+[[bench]]
+name = "ustr"
 harness = false

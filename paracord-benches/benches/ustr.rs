@@ -1,5 +1,6 @@
 use divan::{black_box_drop, Bencher};
-use paracord::ParaCord;
+use foldhash::fast::RandomState;
+use ustr::Ustr;
 
 fn main() {
     divan::Divan::from_args()
@@ -11,30 +12,33 @@ fn main() {
 
 #[divan::bench]
 fn get_or_intern(b: Bencher) {
-    let p = ParaCord::default();
     b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_local_refs(|s| black_box_drop(p.get_or_intern(s)));
+        .bench_local_refs(|s| {
+            black_box_drop(Ustr::from(s));
+        });
 }
 
 #[divan::bench]
 fn get(b: Bencher) {
-    let p = ParaCord::default();
     for x in 100000..=999999 {
-        p.get_or_intern(&x.to_string());
+        Ustr::from(&x.to_string());
     }
 
     b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_local_refs(|s| black_box_drop(p.get(s).unwrap()));
+        .bench_local_refs(|s| {
+            black_box_drop(Ustr::from_existing(s));
+        });
 }
 
 #[divan::bench]
 fn resolve(b: Bencher) {
-    let p = ParaCord::default();
     let mut keys = vec![];
     for x in 100000..=999999 {
-        keys.push(p.get_or_intern(&x.to_string()));
+        keys.push(Ustr::from(&x.to_string()));
     }
 
     b.with_inputs(|| *fastrand::choice(&keys).unwrap())
-        .bench_local_refs(|key| black_box_drop(p.resolve(*key)));
+        .bench_local_refs(|key| {
+            black_box_drop(&**key);
+        });
 }
