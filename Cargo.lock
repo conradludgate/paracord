@@ -57,12 +57,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bumpalo"
-version = "3.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1628fb46dfa0b37568d12e5edd512553eccf6a22a78e8bde00bb4aed84d5bdbf"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -325,13 +319,13 @@ name = "paracord"
 version = "0.1.0-alpha.2"
 dependencies = [
  "boxcar",
- "bumpalo",
  "clashmap",
  "divan",
  "fastrand",
  "foldhash",
  "lasso",
  "thread_local",
+ "typed-arena",
  "typesize",
 ]
 
@@ -572,6 +566,12 @@ dependencies = [
  "tracing-core",
  "tracing-log",
 ]
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "typesize"

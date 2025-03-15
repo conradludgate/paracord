@@ -4,12 +4,12 @@ use std::{
     thread::available_parallelism,
 };
 
-use bumpalo::Bump;
 use clashmap::{
     tableref::{entry::Entry, entrymut::EntryMut},
     ClashTable,
 };
 use thread_local::ThreadLocal;
+use typed_arena::Arena;
 
 use crate::Key;
 
@@ -27,14 +27,14 @@ use crate::Key;
 ///
 /// This slice interner is not garbage collected, so slices that are allocated in the interner are not released
 /// until the [`ParaCord`] instance is dropped.
-pub struct ParaCord<T: 'static, S = foldhash::fast::RandomState> {
+pub struct ParaCord<T: 'static + Send, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
     slice_to_keys: ClashTable<(typesize::Ref<'static, [T]>, u32)>,
-    alloc: ThreadLocal<Bump>,
+    alloc: ThreadLocal<Arena<T>>,
     hasher: S,
 }
 
-impl<T: 'static> Default for ParaCord<T> {
+impl<T: 'static + Send> Default for ParaCord<T> {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
@@ -47,7 +47,15 @@ fn assert_key(key: usize) -> u32 {
     key as u32
 }
 
-impl<T: 'static, S: BuildHasher> ParaCord<T, S> {
+unsafe fn alloc<T: Clone>(alloc: &Arena<T>, s: &[T]) -> &'static [T] {
+    alloc.reserve_extend(s.len());
+    let s = alloc.alloc_extend(s.iter().cloned());
+
+    // SAFETY: caller will not drop alloc until it drops the containers storing this
+    unsafe { &*(s as &[T] as *const [T]) }
+}
+
+impl<T: 'static + Send, S: BuildHasher> ParaCord<T, S> {
     /// Create a new `ParaCord` instance with the given hasher state.
     pub fn with_hasher(hasher: S) -> Self {
         Self {
@@ -59,7 +67,7 @@ impl<T: 'static, S: BuildHasher> ParaCord<T, S> {
     }
 }
 
-impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
+impl<T: 'static + Send + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
     /// Try and get the [`Key`] associated with the given slice.
     /// Returns [`None`] if not found.
     pub fn get(&self, s: &[T]) -> Option<Key> {
@@ -89,10 +97,8 @@ impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
             // SAFETY: we assume the key is correct given its existence in the set
             Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
             Entry::Vacant(entry) => {
-                let bump = self.alloc.get_or_default();
-
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { &*(bump.alloc_slice_clone(s) as &[T] as *const [T]) };
+                let s = unsafe { alloc(self.alloc.get_or_default(), s) };
 
                 let key = self.keys_to_slice.push(s);
                 let key = assert_key(key);
@@ -113,10 +119,8 @@ impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
             // SAFETY: we assume the key is correct given its existence in the set
             EntryMut::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
             EntryMut::Vacant(entry) => {
-                let bump = self.alloc.get_or_default();
-
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { &*(bump.alloc_slice_clone(s) as &[T] as *const [T]) };
+                let s = unsafe { alloc(self.alloc.get_or_default(), s) };
 
                 let key = self.keys_to_slice.push(s);
                 let key = assert_key(key);
@@ -190,7 +194,7 @@ impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
         self.keys_to_slice.is_empty()
     }
 
-    /// Get an iterator over every ([`Key`], [`&str`]) pair
+    /// Get an iterator over every ([`Key`], `&[T]`) pair
     /// that has been allocated in this [`ParaCord`] instance.
     pub fn iter(&self) -> impl Iterator<Item = (Key, &[T])> {
         self.keys_to_slice
@@ -203,7 +207,7 @@ impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
     pub fn reset(&mut self) {
         self.keys_to_slice.clear();
         self.slice_to_keys.clear();
-        self.alloc.iter_mut().for_each(|b| b.reset());
+        self.alloc.iter_mut().for_each(|b| drop(core::mem::take(b)));
     }
 
     /// Determine how much space has been used to allocate all the slices.
@@ -215,12 +219,12 @@ impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> ParaCord<T, S> {
             + self
                 .alloc
                 .iter_mut()
-                .map(|b| b.iter_allocated_chunks().map(|c| c.len()).sum::<usize>())
+                .map(|b| b.len() * size_of::<T>())
                 .sum::<usize>()
     }
 }
 
-impl<T: 'static + Hash + Eq + Clone, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<I>
+impl<T: 'static + Send + Hash + Eq + Clone, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<I>
     for ParaCord<T, S>
 {
     fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
@@ -238,7 +242,9 @@ impl<T: 'static + Hash + Eq + Clone, I: AsRef<[T]>, S: BuildHasher + Default> Fr
     }
 }
 
-impl<T: 'static + Hash + Eq + Clone, I: AsRef<[T]>, S: BuildHasher> Extend<I> for ParaCord<T, S> {
+impl<T: 'static + Send + Hash + Eq + Clone, I: AsRef<[T]>, S: BuildHasher> Extend<I>
+    for ParaCord<T, S>
+{
     fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
         // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
         for s in iter {
@@ -278,7 +284,7 @@ impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
     }
 }
 
-impl<T: 'static + Hash + Eq + Clone, S: BuildHasher> Index<Key> for ParaCord<T, S> {
+impl<T: 'static + Send + Hash + Eq + Clone, S: BuildHasher> Index<Key> for ParaCord<T, S> {
     type Output = [T];
 
     fn index(&self, index: Key) -> &Self::Output {

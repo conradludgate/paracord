@@ -13,9 +13,7 @@ fn main() {
 fn get_or_intern(b: Bencher) {
     let p = ParaCord::default();
     b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_local_refs(|s| {
-            black_box_drop(p.get_or_intern(s));
-        });
+        .bench_local_refs(|s| black_box_drop(p.get_or_intern(s)));
 }
 
 #[divan::bench]
@@ -26,9 +24,7 @@ fn get(b: Bencher) {
     }
 
     b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_local_refs(|s| {
-            black_box_drop(p.get(s).unwrap());
-        });
+        .bench_local_refs(|s| black_box_drop(p.get(s).unwrap()));
 }
 
 #[divan::bench]
@@ -40,7 +36,5 @@ fn resolve(b: Bencher) {
     }
 
     b.with_inputs(|| fastrand::choice(&keys).unwrap())
-        .bench_local_refs(|key| {
-            black_box_drop(p.resolve(**key));
-        });
+        .bench_local_refs(|key| black_box_drop(p.resolve(**key)));
 }
