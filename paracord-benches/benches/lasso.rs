@@ -12,9 +12,11 @@ fn main() {
 
 #[divan::bench]
 fn get_or_intern(b: Bencher) {
-    let p = ThreadedRodeo::<Spur, RandomState>::with_hasher(RandomState::default());
-    b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-        .bench_refs(|s| black_box_drop(p.get_or_intern(s)));
+    b.bench_refs2(
+        || ThreadedRodeo::<Spur, RandomState>::with_hasher(RandomState::default()),
+        |_| fastrand::u32(100000..=999999).to_string(),
+        |p, s| black_box_drop(p.get_or_intern(s)),
+    );
 }
 
 #[divan::bench]

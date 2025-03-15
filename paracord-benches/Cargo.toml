@@ -8,7 +8,7 @@ rust-version = "1.80.0"
 [dependencies]
 
 [dev-dependencies]
-divan = "0.1.17"
+divan = { git = "https://github.com/conradludgate/divan", branch = "singletons" }
 fastrand = "2"
 foldhash = "0.1"
 
