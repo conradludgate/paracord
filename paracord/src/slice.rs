@@ -1,8 +1,10 @@
 use std::{
     hash::{BuildHasher, Hash},
+    mem::size_of,
     ops::Index,
     thread::available_parallelism,
 };
+
 
 use clashmap::{
     tableref::{entry::Entry, entrymut::EntryMut},

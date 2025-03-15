@@ -331,8 +331,8 @@ impl<S: BuildHasher> Index<Key> for ParaCord<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::hash::RandomState;
     use std::{
+        collections::hash_map::RandomState,
         sync::{Arc, Barrier},
         thread,
     };
