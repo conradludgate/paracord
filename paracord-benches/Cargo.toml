@@ -1,0 +1,23 @@
+[package]
+name = "paracord-benches"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+divan = "0.1.17"
+fastrand = "2"
+foldhash = "0.1"
+
+paracord = { path = "../paracord" }
+lasso = { version = "0.7", features = ["multi-threaded"] }
+
+[[bench]]
+name = "paracord"
+harness = false
+
+[[bench]]
+name = "lasso"
+harness = false

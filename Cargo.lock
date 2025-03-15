@@ -320,13 +320,21 @@ version = "0.1.0-rc.2"
 dependencies = [
  "boxcar",
  "clashmap",
+ "foldhash",
+ "thread_local",
+ "typed-arena",
+ "typesize",
+]
+
+[[package]]
+name = "paracord-benches"
+version = "0.1.0"
+dependencies = [
  "divan",
  "fastrand",
  "foldhash",
  "lasso",
- "thread_local",
- "typed-arena",
- "typesize",
+ "paracord",
 ]
 
 [[package]]
