@@ -1,3 +1,18 @@
+//! [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interer](https://en.wikipedia.org/wiki/String_interning).
+//!
+//! When calling [`ParaCord::get_or_intern`], a [`Key`] is returned. This [`Key`] is guaranteed to be unique if the input string is unique,
+//! and is guaranteed to be the same if the input string is the same. [`Key`] is 32bits, and has a niche value which allows `Option<Key>` to
+//! also be 32bits.
+//!
+//! If you don't want to intern the string, but check for it's existence, you can use [`ParaCord::get`], which returns `None` if not
+//! present.
+//!
+//! [`Key`]s can be exchanged back into strings using [`ParaCord::resolve`]. It's important to keep in mind that this might panic
+//! or return nonsense results if given a key returned by some other [`ParaCord`] instance.
+//!
+//! This string interner is not garbage collected, so strings that are allocated in the interner are not released
+//! until the [`ParaCord`] instance is dropped.
+
 #![warn(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
@@ -19,25 +34,59 @@ use clashmap::{
 };
 use thread_local::ThreadLocal;
 
+/// Key type returned by [`ParaCord`].
+///
+/// [`Key`] implements [`core::cmp::Ord`] for use within collections like [`BTreeMap`](std::collections::BTreeMap),
+/// but the order is not defined to be meaningful or relied upon. Treat [`Key`]s as opaque blobs, with an unstable representation.
 #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
 pub struct Key(NonZeroU32);
 
 impl Key {
+    /// Turn the key into a u32.
+    ///
+    /// The only guarantee is that [`Key::try_from_repr`] is the inverse of this function,
+    /// and will always return the same key.
+    ///
+    /// ```
+    /// use paracord::Key;
+    /// # let paracord = paracord::ParaCord::default();
+    /// # let key = paracord.get_or_intern("");
+    /// let key2 = Key::try_from_repr(key.into_repr()).unwrap();
+    /// assert_eq!(key, key2);
+    /// ``````
     pub fn into_repr(self) -> u32 {
-        self.0.get() - 1
+        self.0.get() ^ u32::MAX
     }
 
+    /// Recreate the key from a u32.
+    ///
+    /// The only guarantee is that [`Key::into_repr`] is the inverse of this function,
+    /// and will always return the same u32.
     pub fn try_from_repr(x: u32) -> Option<Self> {
-        NonZeroU32::new(x.checked_add(1)?).map(Self)
+        NonZeroU32::new(x ^ u32::MAX).map(Self)
     }
 
     /// Safety: i must be less than u32::MAX
     unsafe fn new_unchecked(i: u32) -> Self {
         // SAFETY: from caller
-        Key(unsafe { NonZeroU32::new_unchecked(i + 1) })
+        Key(unsafe { NonZeroU32::new_unchecked(i ^ u32::MAX) })
     }
 }
 
+/// [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interer](https://en.wikipedia.org/wiki/String_interning).
+///
+/// When calling [`ParaCord::get_or_intern`], a [`Key`] is returned. This [`Key`] is guaranteed to be unique if the input string is unique,
+/// and is guaranteed to be the same if the input string is the same. [`Key`] is 32bits, and has a niche value which allows `Option<Key>` to
+/// also be 32bits.
+///
+/// If you don't want to intern the string, but check for it's existence, you can use [`ParaCord::get`], which returns `None` if not
+/// present.
+///
+/// [`Key`]s can be exchanged back into strings using [`ParaCord::resolve`]. It's important to keep in mind that this might panic
+/// or return nonsense results if given a key returned by some other [`ParaCord`] instance.
+///
+/// This string interner is not garbage collected, so strings that are allocated in the interner are not released
+/// until the [`ParaCord`] instance is dropped.
 pub struct ParaCord<S = foldhash::fast::RandomState> {
     keys_to_strings: boxcar::Vec<&'static str>,
     strings_to_keys: ClashTable<(typesize::Ref<'static, str>, u32)>,
@@ -59,6 +108,7 @@ fn assert_key(key: usize) -> u32 {
 }
 
 impl<S: BuildHasher> ParaCord<S> {
+    /// Create a new `ParaCord` instance with the given hasher state.
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             keys_to_strings: boxcar::Vec::default(),
@@ -68,6 +118,8 @@ impl<S: BuildHasher> ParaCord<S> {
         }
     }
 
+    /// Try and get the [`Key`] associated with the given string.
+    /// Returns [`None`] if not found.
     pub fn get(&self, s: &str) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
         let key = self.strings_to_keys.find(hash, |k| s == &*k.0)?;
@@ -75,6 +127,8 @@ impl<S: BuildHasher> ParaCord<S> {
         Some(unsafe { Key::new_unchecked(key.1) })
     }
 
+    /// Try and get the [`Key`] associated with the given string.
+    /// Allocates a new key if not found.
     pub fn get_or_intern(&self, s: &str) -> Key {
         let hash = self.hasher.hash_one(s);
         let Some(key) = self.strings_to_keys.find(hash, |k| s == &*k.0) else {
@@ -94,9 +148,10 @@ impl<S: BuildHasher> ParaCord<S> {
             Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
             Entry::Vacant(entry) => {
                 let bump = self.alloc.get_or_default();
-                let s = bump.alloc_str(s);
+
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static str`.
-                let s = unsafe { &*(s as &str as *const str) };
+                let s = unsafe { &*(bump.alloc_str(s) as &str as *const str) };
+
                 let key = self.keys_to_strings.push(s);
                 let key = assert_key(key);
                 entry.insert((typesize::Ref(s), key));
@@ -131,6 +186,10 @@ impl<S: BuildHasher> ParaCord<S> {
         }
     }
 
+    /// Try and get the [`Key`] associated with the given string.
+    /// Allocates a new key if not found.
+    ///
+    /// Unlike [`ParaCord::get_or_intern`], this function does not need to also allocate the string.
     pub fn get_or_intern_static(&self, s: &'static str) -> Key {
         let hash = self.hasher.hash_one(s);
         let Some(key) = self.strings_to_keys.find(hash, |k| s == &*k.0) else {
@@ -159,25 +218,38 @@ impl<S: BuildHasher> ParaCord<S> {
         }
     }
 
+    /// Try and resolve the string associated with this [`Key`].
+    ///
+    /// This can only return `None` if given a key that was allocated from
+    /// a different [`ParaCord`] instance, but it might return an arbitrary string
+    /// as well.
     pub fn try_resolve(&self, key: Key) -> Option<&str> {
-        let key = key.0.get() - 1;
-        let s = self.keys_to_strings.get(key as usize)?;
+        let s = self.keys_to_strings.get(key.into_repr() as usize)?;
         Some(*s)
     }
 
+    /// Resolve the string associated with this [`Key`].
+    ///
+    /// # Panics
+    /// This can panic if given a key that was allocated from
+    /// a different [`ParaCord`] instance, but it might return an arbitrary string
+    /// as well.
     pub fn resolve(&self, key: Key) -> &str {
-        let key = key.0.get() - 1;
-        self.keys_to_strings[key as usize]
+        self.keys_to_strings[key.into_repr() as usize]
     }
 
+    /// Determine how many strings have been allocated
     pub fn len(&self) -> usize {
         self.keys_to_strings.count()
     }
 
+    /// Determine if no strings have been allocated
     pub fn is_empty(&self) -> bool {
         self.keys_to_strings.is_empty()
     }
 
+    /// Get an iterator over every ([`Key`], [`&str`]) pair
+    /// that has been allocated in this [`ParaCord`] instance.
     pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
         self.keys_to_strings
             .iter()
@@ -185,16 +257,19 @@ impl<S: BuildHasher> ParaCord<S> {
             .map(|(key, s)| unsafe { (Key::new_unchecked(key as u32), &**s) })
     }
 
+    /// Deallocate all interned strings, but can retain some allocated memory
     pub fn reset(&mut self) {
         self.keys_to_strings.clear();
         self.strings_to_keys.clear();
         self.alloc.iter_mut().for_each(|b| b.reset());
     }
 
+    /// Determine how much space has been used to allocate all the strings.
     pub fn current_memory_usage(&mut self) -> usize {
         use typesize::TypeSize;
-        self.keys_to_strings.count() * size_of::<*const str>()
-            + self.strings_to_keys.get_size()
+        size_of::<Self>()
+            + self.keys_to_strings.count() * size_of::<*const str>()
+            + self.strings_to_keys.extra_size()
             + self
                 .alloc
                 .iter_mut()
