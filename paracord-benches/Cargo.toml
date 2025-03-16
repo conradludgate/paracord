@@ -21,13 +21,17 @@ name = "paracord"
 harness = false
 
 [[bench]]
-name = "paracord_global"
-harness = false
-
-[[bench]]
 name = "lasso"
 harness = false
 
 [[bench]]
-name = "ustr"
+name = "paracord_global"
+harness = false
+
+[[bench]]
+name = "ustr_global"
+harness = false
+
+[[bench]]
+name = "lasso_global"
 harness = false
