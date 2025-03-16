@@ -5,11 +5,11 @@ use std::{
     thread::available_parallelism,
 };
 
+use alloc::Alloc;
 use clashmap::ClashTable;
 use thread_local::ThreadLocal;
-use typed_arena::Arena;
 
-use crate::{send_if_sync::SendIfSync, Key};
+use crate::Key;
 
 mod alloc;
 
@@ -30,7 +30,7 @@ mod alloc;
 pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
     slice_to_keys: ClashTable<(typesize::Ref<'static, [T]>, Key, u64)>,
-    alloc: ThreadLocal<Arena<SendIfSync<T>>>,
+    alloc: ThreadLocal<Alloc<T>>,
     hasher: S,
 }
 
@@ -141,11 +141,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         size_of::<Self>()
             + self.keys_to_slice.count() * size_of::<*const str>()
             + self.slice_to_keys.extra_size()
-            + self
-                .alloc
-                .iter_mut()
-                .map(|b| b.len() * size_of::<T>())
-                .sum::<usize>()
+            + self.alloc.iter_mut().map(|b| b.size()).sum::<usize>()
     }
 }
 
