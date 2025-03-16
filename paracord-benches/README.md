@@ -5,7 +5,7 @@ Results
 ### Linux Ryzen 9 7950x
 
 ```
-Timer precision: 10 ns
+Timer precision: 9 ns
 paracord          fastest       │ slowest       │ median        │ mean
 ├─ get                          │               │               │
 │  ├─ t=1         63.9 ns       │ 525.3 ns      │ 78.39 ns      │ 83.37 ns
@@ -20,7 +20,6 @@ paracord          fastest       │ slowest       │ median        │ mean
    ├─ t=2         8.332 ns      │ 35.61 ns      │ 11.16 ns      │ 11.89 ns
    ╰─ t=16        9.002 ns      │ 38.09 ns      │ 13.15 ns      │ 15.27 ns
 
-Timer precision: 9 ns
 lasso             fastest       │ slowest       │ median        │ mean
 ├─ get                          │               │               │
 │  ├─ t=1         52.08 ns      │ 420.6 ns      │ 76.05 ns      │ 79.82 ns
@@ -36,9 +35,10 @@ lasso             fastest       │ slowest       │ median        │ mean
    ╰─ t=16        34.63 ns      │ 144.8 ns      │ 84.37 ns      │ 86.78 ns
 ```
 
-### Apple M4 Max
+### Apple M4 Max
 
 ```
+Timer precision: 41 ns
 paracord          fastest       │ slowest       │ median        │ mean
 ├─ get                          │               │               │
 │  ├─ t=1         22.28 ns      │ 53.11 ns      │ 25.86 ns      │ 27.29 ns
@@ -88,7 +88,6 @@ ustr_global       fastest       │ slowest       │ median        │ mean
    ├─ t=2         4.051 ns      │ 13.88 ns      │ 4.996 ns      │ 5.057 ns
    ╰─ t=16        4.471 ns      │ 31.73 ns      │ 7.106 ns      │ 8.012 ns
 
-Timer precision: 9 ns
 paracord_global   fastest       │ slowest       │ median        │ mean
 ├─ get                          │               │               │
 │  ├─ t=1         39.63 ns      │ 83.95 ns      │ 45.28 ns      │ 47.39 ns
@@ -103,7 +102,6 @@ paracord_global   fastest       │ slowest       │ median        │ mean
    ├─ t=2         7.122 ns      │ 27.27 ns      │ 8.456 ns      │ 9.273 ns
    ╰─ t=16        7.031 ns      │ 36.54 ns      │ 9.936 ns      │ 11.3 ns 
 
-Timer precision: 9 ns
 lasso_global      fastest       │ slowest       │ median        │ mean
 ├─ get                          │               │               │
 │  ├─ t=1         33.25 ns      │ 76.23 ns      │ 37.74 ns      │ 40.36 ns
@@ -119,7 +117,7 @@ lasso_global      fastest       │ slowest       │ median        │ mean
    ╰─ t=16        65.62 ns      │ 195.5 ns      │ 102.7 ns      │ 107.4 ns
 ```
 
-### Apple M4 Max
+### Apple M4 Max
 
 ```
 Timer precision: 41 ns
