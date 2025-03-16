@@ -8,6 +8,8 @@ use typed_arena::Arena;
 
 use crate::{send_if_sync::SendIfSync, slice::ParaCord, Key};
 
+use super::TableEntry;
+
 pub(super) struct Alloc<T>(Arena<SendIfSync<T>>);
 
 impl<T> Default for Alloc<T> {
@@ -54,15 +56,19 @@ impl<T: Copy> Alloc<T> {
 impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     #[cold]
     pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
-        match self.slice_to_keys.entry(hash, |k| s == &*k.0, |k| k.2) {
-            Entry::Occupied(entry) => entry.get().1,
+        match self.slice_to_keys.entry(hash, |k| s == k.slice, |k| k.hash) {
+            Entry::Occupied(entry) => entry.get().key,
             Entry::Vacant(entry) => {
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
                 let s = unsafe { self.alloc.get_or_default().alloc(s) };
 
                 let key = self.keys_to_slice.push(s);
                 let key = Key::from_index(key);
-                entry.insert((typesize::Ref(s), key, hash));
+                entry.insert(TableEntry {
+                    slice: s,
+                    key,
+                    hash,
+                });
 
                 // SAFETY: as asserted the key is correct
                 key
@@ -72,8 +78,11 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 
     #[cold]
     pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
-        match self.slice_to_keys.entry_mut(hash, |k| s == &*k.0, |k| k.2) {
-            EntryMut::Occupied(entry) => entry.get().1,
+        match self
+            .slice_to_keys
+            .entry_mut(hash, |k| s == k.slice, |k| k.hash)
+        {
+            EntryMut::Occupied(entry) => entry.get().key,
             EntryMut::Vacant(entry) => {
                 let alloca = match self.alloc.iter_mut().next() {
                     Some(alloc) => alloc,
@@ -85,7 +94,11 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 
                 let key = self.keys_to_slice.push(s);
                 let key = Key::from_index(key);
-                entry.insert((typesize::Ref(s), key, hash));
+                entry.insert(TableEntry {
+                    slice: s,
+                    key,
+                    hash,
+                });
 
                 // SAFETY: as asserted the key is correct
                 key

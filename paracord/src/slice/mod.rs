@@ -8,6 +8,7 @@ use std::{
 use alloc::Alloc;
 use clashmap::ClashTable;
 use thread_local::ThreadLocal;
+use typesize::TypeSize;
 
 use crate::Key;
 
@@ -29,10 +30,18 @@ mod alloc;
 /// until the [`ParaCord`] instance is dropped.
 pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
-    slice_to_keys: ClashTable<(typesize::Ref<'static, [T]>, Key, u64)>,
+    slice_to_keys: ClashTable<TableEntry<T>>,
     alloc: ThreadLocal<Alloc<T>>,
     hasher: S,
 }
+
+struct TableEntry<T: 'static> {
+    slice: &'static [T],
+    key: Key,
+    hash: u64,
+}
+
+impl<T> TypeSize for TableEntry<T> {}
 
 impl<T: Sync + 'static + Sync> Default for ParaCord<T> {
     fn default() -> Self {
@@ -57,9 +66,9 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Returns [`None`] if not found.
     pub fn get(&self, s: &[T]) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
-        let key = self.slice_to_keys.find(hash, |k| s == &*k.0)?;
+        let key = self.slice_to_keys.find(hash, |k| s == k.slice)?;
         // SAFETY: we assume the key is correct given its existence in the set
-        Some(key.1)
+        Some(key.key)
     }
 
     /// Try and get the [`Key`] associated with the given slice.
@@ -72,11 +81,11 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// if called from hundreds of threads.
     pub fn get_or_intern(&self, s: &[T]) -> Key {
         let hash = self.hasher.hash_one(s);
-        let Some(key) = self.slice_to_keys.find(hash, |k| s == &*k.0) else {
+        let Some(key) = self.slice_to_keys.find(hash, |k| s == k.slice) else {
             return self.intern_slow(s, hash);
         };
         // SAFETY: we assume the key is correct given its existence in the set
-        key.1
+        key.key
     }
 
     /// Try and resolve the slice associated with this [`Key`].
