@@ -120,15 +120,15 @@ macro_rules! custom_key {
                 Self(Self::paracord().get_or_intern(s))
             }
 
-            /// Try and get the key associated with the given string.
-            /// Allocates a new key if not found.
-            ///
-            /// Unlike
-            #[doc = concat!("[`",stringify!($key),"::get_or_intern`],")]
-            /// this function does not need to also allocate the string.
-            pub fn get_or_intern_static(s: &'static str) -> Self {
-                Self(Self::paracord().get_or_intern_static(s))
-            }
+            // /// Try and get the key associated with the given string.
+            // /// Allocates a new key if not found.
+            // ///
+            // /// Unlike
+            // #[doc = concat!("[`",stringify!($key),"::get_or_intern`],")]
+            // /// this function does not need to also allocate the string.
+            // pub fn get_or_intern_static(s: &'static str) -> Self {
+            //     Self(Self::paracord().get_or_intern_static(s))
+            // }
 
             /// Resolve the string associated with this key.
             pub fn resolve(self) -> &'static str {
@@ -247,13 +247,13 @@ impl<S: BuildHasher> ParaCord<S> {
         self.inner.get_or_intern(s.as_bytes())
     }
 
-    /// Try and get the [`Key`] associated with the given string.
-    /// Allocates a new key if not found.
-    ///
-    /// Unlike [`ParaCord::get_or_intern`], this function does not need to also allocate the string.
-    pub fn get_or_intern_static(&self, s: &'static str) -> Key {
-        self.inner.get_or_intern_static(s.as_bytes())
-    }
+    // /// Try and get the [`Key`] associated with the given string.
+    // /// Allocates a new key if not found.
+    // ///
+    // /// Unlike [`ParaCord::get_or_intern`], this function does not need to also allocate the string.
+    // pub fn get_or_intern_static(&self, s: &'static str) -> Key {
+    //     self.inner.get_or_intern_static(s.as_bytes())
+    // }
 
     /// Try and resolve the string associated with this [`Key`].
     ///
@@ -403,19 +403,19 @@ mod tests {
         assert_eq!(c, rodeo.get_or_intern("C"));
     }
 
-    #[test]
-    fn get_or_intern_static() {
-        let rodeo = ParaCord::default();
+    // #[test]
+    // fn get_or_intern_static() {
+    //     let rodeo = ParaCord::default();
 
-        let a = rodeo.get_or_intern_static("A");
-        assert_eq!(a, rodeo.get_or_intern_static("A"));
+    //     let a = rodeo.get_or_intern_static("A");
+    //     assert_eq!(a, rodeo.get_or_intern_static("A"));
 
-        let b = rodeo.get_or_intern_static("B");
-        assert_eq!(b, rodeo.get_or_intern_static("B"));
+    //     let b = rodeo.get_or_intern_static("B");
+    //     assert_eq!(b, rodeo.get_or_intern_static("B"));
 
-        let c = rodeo.get_or_intern_static("C");
-        assert_eq!(c, rodeo.get_or_intern_static("C"));
-    }
+    //     let c = rodeo.get_or_intern_static("C");
+    //     assert_eq!(c, rodeo.get_or_intern_static("C"));
+    // }
 
     #[test]
     fn get() {
@@ -553,9 +553,9 @@ mod tests {
     #[test]
     fn iter() {
         let rodeo = ParaCord::default();
-        rodeo.get_or_intern_static("A");
-        rodeo.get_or_intern_static("B");
-        rodeo.get_or_intern_static("C");
+        rodeo.get_or_intern("A");
+        rodeo.get_or_intern("B");
+        rodeo.get_or_intern("C");
         let values: Vec<_> = rodeo.iter().map(|(k, v)| (k.into_repr(), v)).collect();
         assert_eq!(values.len(), 3);
         assert!(values.contains(&(0, "A")));
@@ -681,33 +681,33 @@ mod tests {
         }
     }
 
-    // Test for race conditions on key insertion
-    // https://github.com/Kixiron/lasso/issues/18
-    #[test]
-    #[cfg(not(miri))]
-    fn get_or_intern_static_threaded_racy() {
-        const THREADS: usize = 10;
+    // // Test for race conditions on key insertion
+    // // https://github.com/Kixiron/lasso/issues/18
+    // #[test]
+    // #[cfg(not(miri))]
+    // fn get_or_intern_static_threaded_racy() {
+    //     const THREADS: usize = 10;
 
-        let mut handles = Vec::with_capacity(THREADS);
-        let barrier = Arc::new(Barrier::new(THREADS));
-        let rodeo = Arc::new(ParaCord::default());
-        let expected = Key::try_from_repr(0).unwrap();
+    //     let mut handles = Vec::with_capacity(THREADS);
+    //     let barrier = Arc::new(Barrier::new(THREADS));
+    //     let rodeo = Arc::new(ParaCord::default());
+    //     let expected = Key::try_from_repr(0).unwrap();
 
-        for _ in 0..THREADS {
-            let moved_rodeo = Arc::clone(&rodeo);
-            let moved_barrier = Arc::clone(&barrier);
+    //     for _ in 0..THREADS {
+    //         let moved_rodeo = Arc::clone(&rodeo);
+    //         let moved_barrier = Arc::clone(&barrier);
 
-            handles.push(thread::spawn(move || {
-                moved_barrier.wait();
-                assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-                assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-                assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-                assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-            }));
-        }
+    //         handles.push(thread::spawn(move || {
+    //             moved_barrier.wait();
+    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
+    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
+    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
+    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
+    //         }));
+    //     }
 
-        for handle in handles {
-            handle.join().unwrap();
-        }
-    }
+    //     for handle in handles {
+    //         handle.join().unwrap();
+    //     }
+    // }
 }
