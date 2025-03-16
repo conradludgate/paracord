@@ -138,7 +138,7 @@ dependencies = [
 [[package]]
 name = "divan"
 version = "0.1.17"
-source = "git+https://github.com/conradludgate/divan?branch=singletons#d697ccdfee3bab037585ee46bfac79559b2aac6b"
+source = "git+https://github.com/conradludgate/divan?branch=singletons#fe0096bcfbde65c8531fb879f58e3476a91a0ccd"
 dependencies = [
  "cfg-if",
  "clap",
@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "divan-macros"
 version = "0.1.17"
-source = "git+https://github.com/conradludgate/divan?branch=singletons#d697ccdfee3bab037585ee46bfac79559b2aac6b"
+source = "git+https://github.com/conradludgate/divan?branch=singletons#fe0096bcfbde65c8531fb879f58e3476a91a0ccd"
 dependencies = [
  "proc-macro2",
  "quote",
