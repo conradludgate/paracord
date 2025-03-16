@@ -11,7 +11,7 @@ fn main() {
 
 #[divan::bench]
 fn get_or_intern(b: Bencher) {
-    b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
+    b.with_inputs(|| fastrand::u32(10000000..=99999999).to_string())
         .bench_refs(|s| black_box_drop(Ustr::from(s)));
 }
 
