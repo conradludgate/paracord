@@ -29,6 +29,8 @@ use std::{
 /// Support for interning more than just string slices
 pub mod slice;
 
+mod send_if_sync;
+
 #[doc(hidden)]
 pub mod __private {
     pub use foldhash::fast::RandomState;
@@ -116,19 +118,15 @@ macro_rules! custom_key {
 
             /// Try and get the key associated with the given string.
             /// Allocates a new key if not found.
+            ///
+            /// ## Thread local
+            ///
+            /// This employs a thread local allocation strategy.
+            /// This might cause undesired memory fragmentation and amplification
+            /// if called from hundreds of threads.
             pub fn get_or_intern(s: &str) -> Self {
                 Self(Self::paracord().get_or_intern(s))
             }
-
-            // /// Try and get the key associated with the given string.
-            // /// Allocates a new key if not found.
-            // ///
-            // /// Unlike
-            // #[doc = concat!("[`",stringify!($key),"::get_or_intern`],")]
-            // /// this function does not need to also allocate the string.
-            // pub fn get_or_intern_static(s: &'static str) -> Self {
-            //     Self(Self::paracord().get_or_intern_static(s))
-            // }
 
             /// Resolve the string associated with this key.
             pub fn resolve(self) -> &'static str {
@@ -243,17 +241,15 @@ impl<S: BuildHasher> ParaCord<S> {
 
     /// Try and get the [`Key`] associated with the given string.
     /// Allocates a new key if not found.
+    ///
+    /// ## Thread local
+    ///
+    /// This employs a thread local allocation strategy.
+    /// This might cause undesired memory fragmentation and amplification
+    /// if called from hundreds of threads.
     pub fn get_or_intern(&self, s: &str) -> Key {
         self.inner.get_or_intern(s.as_bytes())
     }
-
-    // /// Try and get the [`Key`] associated with the given string.
-    // /// Allocates a new key if not found.
-    // ///
-    // /// Unlike [`ParaCord::get_or_intern`], this function does not need to also allocate the string.
-    // pub fn get_or_intern_static(&self, s: &'static str) -> Key {
-    //     self.inner.get_or_intern_static(s.as_bytes())
-    // }
 
     /// Try and resolve the string associated with this [`Key`].
     ///
@@ -402,20 +398,6 @@ mod tests {
         let c = rodeo.get_or_intern("C");
         assert_eq!(c, rodeo.get_or_intern("C"));
     }
-
-    // #[test]
-    // fn get_or_intern_static() {
-    //     let rodeo = ParaCord::default();
-
-    //     let a = rodeo.get_or_intern_static("A");
-    //     assert_eq!(a, rodeo.get_or_intern_static("A"));
-
-    //     let b = rodeo.get_or_intern_static("B");
-    //     assert_eq!(b, rodeo.get_or_intern_static("B"));
-
-    //     let c = rodeo.get_or_intern_static("C");
-    //     assert_eq!(c, rodeo.get_or_intern_static("C"));
-    // }
 
     #[test]
     fn get() {
@@ -595,62 +577,6 @@ mod tests {
         assert!(rodeo.get("e").is_some());
     }
 
-    // #[test]
-    // #[cfg(feature = "serialize")]
-    // fn empty_serialize() {
-    //     let rodeo = ParaCord::default();
-
-    //     let ser = serde_json::to_string(&rodeo).unwrap();
-    //     let ser2 = serde_json::to_string(&rodeo).unwrap();
-    //     assert_eq!(ser, ser2);
-
-    //     let deser: ParaCord = serde_json::from_str(&ser).unwrap();
-    //     assert!(deser.is_empty());
-    //     let deser2: ParaCord = serde_json::from_str(&ser2).unwrap();
-    //     assert!(deser2.is_empty());
-    // }
-
-    // #[test]
-    // #[cfg(feature = "serialize")]
-    // fn filled_serialize() {
-    //     let rodeo = ParaCord::default();
-    //     let a = rodeo.get_or_intern("a");
-    //     let b = rodeo.get_or_intern("b");
-    //     let c = rodeo.get_or_intern("c");
-    //     let d = rodeo.get_or_intern("d");
-
-    //     let ser = serde_json::to_string(&rodeo).unwrap();
-    //     let ser2 = serde_json::to_string(&rodeo).unwrap();
-
-    //     let deser: ParaCord = serde_json::from_str(&ser).unwrap();
-    //     let deser2: ParaCord = serde_json::from_str(&ser2).unwrap();
-
-    //     for (correct_key, correct_str) in [(a, "a"), (b, "b"), (c, "c"), (d, "d")].iter().copied() {
-    //         assert_eq!(correct_key, deser.get(correct_str).unwrap());
-    //         assert_eq!(correct_key, deser2.get(correct_str).unwrap());
-
-    //         assert_eq!(correct_str, deser.resolve(&correct_key));
-    //         assert_eq!(correct_str, deser2.resolve(&correct_key));
-    //     }
-    // }
-
-    // #[test]
-    // fn threaded_rodeo_eq() {
-    //     let a = ParaCord::default();
-    //     let b = ParaCord::default();
-    //     assert_eq!(a, b);
-
-    //     let a = ParaCord::default();
-    //     a.get_or_intern("a");
-    //     a.get_or_intern("b");
-    //     a.get_or_intern("c");
-    //     let b = ParaCord::default();
-    //     b.get_or_intern("a");
-    //     b.get_or_intern("b");
-    //     b.get_or_intern("c");
-    //     assert_eq!(a, b);
-    // }
-
     // Test for race conditions on key insertion
     // https://github.com/Kixiron/lasso/issues/18
     #[test]
@@ -680,34 +606,4 @@ mod tests {
             handle.join().unwrap();
         }
     }
-
-    // // Test for race conditions on key insertion
-    // // https://github.com/Kixiron/lasso/issues/18
-    // #[test]
-    // #[cfg(not(miri))]
-    // fn get_or_intern_static_threaded_racy() {
-    //     const THREADS: usize = 10;
-
-    //     let mut handles = Vec::with_capacity(THREADS);
-    //     let barrier = Arc::new(Barrier::new(THREADS));
-    //     let rodeo = Arc::new(ParaCord::default());
-    //     let expected = Key::try_from_repr(0).unwrap();
-
-    //     for _ in 0..THREADS {
-    //         let moved_rodeo = Arc::clone(&rodeo);
-    //         let moved_barrier = Arc::clone(&barrier);
-
-    //         handles.push(thread::spawn(move || {
-    //             moved_barrier.wait();
-    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-    //             assert_eq!(expected, moved_rodeo.get_or_intern_static("A"));
-    //         }));
-    //     }
-
-    //     for handle in handles {
-    //         handle.join().unwrap();
-    //     }
-    // }
 }

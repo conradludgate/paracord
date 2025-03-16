@@ -12,7 +12,7 @@ use clashmap::{
 use thread_local::ThreadLocal;
 use typed_arena::Arena;
 
-use crate::Key;
+use crate::{send_if_sync::SendIfSync, Key};
 
 /// [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interer](https://en.wikipedia.org/wiki/String_interning).
 ///
@@ -28,14 +28,14 @@ use crate::Key;
 ///
 /// This slice interner is not garbage collected, so slices that are allocated in the interner are not released
 /// until the [`ParaCord`] instance is dropped.
-pub struct ParaCord<T: 'static + Send, S = foldhash::fast::RandomState> {
+pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
     slice_to_keys: ClashTable<(typesize::Ref<'static, [T]>, u32, u64)>,
-    alloc: ThreadLocal<Arena<T>>,
+    alloc: ThreadLocal<Arena<SendIfSync<T>>>,
     hasher: S,
 }
 
-impl<T: 'static + Send> Default for ParaCord<T> {
+impl<T: Sync + 'static + Sync> Default for ParaCord<T> {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
@@ -48,7 +48,7 @@ fn assert_key(key: usize) -> u32 {
     key as u32
 }
 
-unsafe fn alloc<T: Copy>(alloc: &Arena<T>, s: &[T]) -> &'static [T] {
+unsafe fn alloc<T: Copy>(alloc: &Arena<SendIfSync<T>>, s: &[T]) -> &'static [T] {
     /// Polyfill for [`MaybeUninit::copy_from_slice`]
     fn copy_from_slice<'a, T: Copy>(this: &'a mut [MaybeUninit<T>], src: &[T]) -> &'a mut [T] {
         // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
@@ -67,14 +67,16 @@ unsafe fn alloc<T: Copy>(alloc: &Arena<T>, s: &[T]) -> &'static [T] {
         unsafe { &mut *(slice as *mut [MaybeUninit<T>] as *mut [T]) }
     }
 
+    let s = SendIfSync::cast_from_slice(s);
     // Safety: we are making sure to init all the elements without panicking.
     let s = copy_from_slice(unsafe { alloc.alloc_uninitialized(s.len()) }, s);
+    let s = SendIfSync::cast_to_slice(s);
 
     // SAFETY: caller will not drop alloc until it drops the containers storing this
-    unsafe { &*(s as &[T] as *const [T]) }
+    unsafe { &*(s as *const [T]) }
 }
 
-impl<T: 'static + Send, S: BuildHasher> ParaCord<T, S> {
+impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
     /// Create a new `ParaCord` instance with the given hasher state.
     pub fn with_hasher(hasher: S) -> Self {
         Self {
@@ -86,7 +88,7 @@ impl<T: 'static + Send, S: BuildHasher> ParaCord<T, S> {
     }
 }
 
-impl<T: 'static + Send + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
+impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Try and get the [`Key`] associated with the given slice.
     /// Returns [`None`] if not found.
     pub fn get(&self, s: &[T]) -> Option<Key> {
@@ -98,6 +100,12 @@ impl<T: 'static + Send + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 
     /// Try and get the [`Key`] associated with the given slice.
     /// Allocates a new key if not found.
+    ///
+    /// ## Thread local
+    ///
+    /// This employs a thread local allocation strategy.
+    /// This might cause undesired memory fragmentation and amplification
+    /// if called from hundreds of threads.
     pub fn get_or_intern(&self, s: &[T]) -> Key {
         let hash = self.hasher.hash_one(s);
         let Some(key) = self.slice_to_keys.find(hash, |k| s == &*k.0) else {
@@ -132,8 +140,13 @@ impl<T: 'static + Send + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
             // SAFETY: we assume the key is correct given its existence in the set
             EntryMut::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
             EntryMut::Vacant(entry) => {
+                let alloca = match self.alloc.iter_mut().next() {
+                    Some(alloc) => alloc,
+                    None => self.alloc.get_or_default(),
+                };
+
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { alloc(self.alloc.get_or_default(), s) };
+                let s = unsafe { alloc(alloca, s) };
 
                 let key = self.keys_to_slice.push(s);
                 let key = assert_key(key);
@@ -215,7 +228,7 @@ impl<T: 'static + Send + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     }
 }
 
-impl<T: 'static + Send + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<I>
+impl<T: 'static + Sync + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<I>
     for ParaCord<T, S>
 {
     fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
@@ -233,7 +246,7 @@ impl<T: 'static + Send + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Defau
     }
 }
 
-impl<T: 'static + Send + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I>
+impl<T: 'static + Sync + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I>
     for ParaCord<T, S>
 {
     fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
@@ -275,7 +288,7 @@ impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
     }
 }
 
-impl<T: 'static + Send + Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
+impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
     type Output = [T];
 
     fn index(&self, index: Key) -> &Self::Output {
