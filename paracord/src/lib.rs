@@ -26,6 +26,8 @@ use std::{
     ops::Index,
 };
 
+use typesize::derive::TypeSize;
+
 /// Support for interning more than just string slices
 pub mod slice;
 
@@ -166,7 +168,8 @@ custom_key!(
 ///
 /// [`Key`] implements [`core::cmp::Ord`] for use within collections like [`BTreeMap`](std::collections::BTreeMap),
 /// but the order is not defined to be meaningful or relied upon. Treat [`Key`]s as opaque blobs, with an unstable representation.
-#[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy, TypeSize)]
+#[repr(transparent)]
 pub struct Key(NonZeroU32);
 
 impl Key {
@@ -198,6 +201,15 @@ impl Key {
     unsafe fn new_unchecked(i: u32) -> Self {
         // SAFETY: from caller
         Key(unsafe { NonZeroU32::new_unchecked(i ^ u32::MAX) })
+    }
+
+    fn from_index(i: usize) -> Self {
+        if usize::BITS >= 32 {
+            assert!(i < u32::MAX as usize);
+        }
+
+        // SAFETY: checked it is less than u32::MAX.
+        unsafe { Self::new_unchecked(i as u32) }
     }
 }
 

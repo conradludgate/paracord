@@ -1,18 +1,17 @@
 use std::{
     hash::{BuildHasher, Hash},
-    mem::{size_of, MaybeUninit},
+    mem::size_of,
     ops::Index,
     thread::available_parallelism,
 };
 
-use clashmap::{
-    tableref::{entry::Entry, entrymut::EntryMut},
-    ClashTable,
-};
+use clashmap::ClashTable;
 use thread_local::ThreadLocal;
 use typed_arena::Arena;
 
 use crate::{send_if_sync::SendIfSync, Key};
+
+mod alloc;
 
 /// [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interer](https://en.wikipedia.org/wiki/String_interning).
 ///
@@ -30,7 +29,7 @@ use crate::{send_if_sync::SendIfSync, Key};
 /// until the [`ParaCord`] instance is dropped.
 pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
-    slice_to_keys: ClashTable<(typesize::Ref<'static, [T]>, u32, u64)>,
+    slice_to_keys: ClashTable<(typesize::Ref<'static, [T]>, Key, u64)>,
     alloc: ThreadLocal<Arena<SendIfSync<T>>>,
     hasher: S,
 }
@@ -39,41 +38,6 @@ impl<T: Sync + 'static + Sync> Default for ParaCord<T> {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
-}
-
-fn assert_key(key: usize) -> u32 {
-    if usize::BITS >= 32 {
-        assert!(key < u32::MAX as usize);
-    }
-    key as u32
-}
-
-unsafe fn alloc<T: Copy>(alloc: &Arena<SendIfSync<T>>, s: &[T]) -> &'static [T] {
-    /// Polyfill for [`MaybeUninit::copy_from_slice`]
-    fn copy_from_slice<'a, T: Copy>(this: &'a mut [MaybeUninit<T>], src: &[T]) -> &'a mut [T] {
-        // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
-        let uninit_src: &[MaybeUninit<T>] = unsafe { core::mem::transmute(src) };
-
-        this.copy_from_slice(uninit_src);
-
-        // SAFETY: Valid elements have just been copied into `this` so it is initialized
-        unsafe { slice_assume_init_mut(this) }
-    }
-
-    /// Polyfill for [`MaybeUninit::slice_assume_init_mut`]
-    const unsafe fn slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
-        // SAFETY: similar to safety notes for `slice_get_ref`, but we have a
-        // mutable reference which is also guaranteed to be valid for writes.
-        unsafe { &mut *(slice as *mut [MaybeUninit<T>] as *mut [T]) }
-    }
-
-    let s = SendIfSync::cast_from_slice(s);
-    // Safety: we are making sure to init all the elements without panicking.
-    let s = copy_from_slice(unsafe { alloc.alloc_uninitialized(s.len()) }, s);
-    let s = SendIfSync::cast_to_slice(s);
-
-    // SAFETY: caller will not drop alloc until it drops the containers storing this
-    unsafe { &*(s as *const [T]) }
 }
 
 impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
@@ -95,7 +59,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         let hash = self.hasher.hash_one(s);
         let key = self.slice_to_keys.find(hash, |k| s == &*k.0)?;
         // SAFETY: we assume the key is correct given its existence in the set
-        Some(unsafe { Key::new_unchecked(key.1) })
+        Some(key.1)
     }
 
     /// Try and get the [`Key`] associated with the given slice.
@@ -112,50 +76,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
             return self.intern_slow(s, hash);
         };
         // SAFETY: we assume the key is correct given its existence in the set
-        unsafe { Key::new_unchecked(key.1) }
-    }
-
-    #[cold]
-    fn intern_slow(&self, s: &[T], hash: u64) -> Key {
-        match self.slice_to_keys.entry(hash, |k| s == &*k.0, |k| k.2) {
-            // SAFETY: we assume the key is correct given its existence in the set
-            Entry::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
-            Entry::Vacant(entry) => {
-                // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { alloc(self.alloc.get_or_default(), s) };
-
-                let key = self.keys_to_slice.push(s);
-                let key = assert_key(key);
-                entry.insert((typesize::Ref(s), key, hash));
-
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key) }
-            }
-        }
-    }
-
-    #[cold]
-    fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
-        match self.slice_to_keys.entry_mut(hash, |k| s == &*k.0, |k| k.2) {
-            // SAFETY: we assume the key is correct given its existence in the set
-            EntryMut::Occupied(entry) => unsafe { Key::new_unchecked(entry.get().1) },
-            EntryMut::Vacant(entry) => {
-                let alloca = match self.alloc.iter_mut().next() {
-                    Some(alloc) => alloc,
-                    None => self.alloc.get_or_default(),
-                };
-
-                // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { alloc(alloca, s) };
-
-                let key = self.keys_to_slice.push(s);
-                let key = assert_key(key);
-                entry.insert((typesize::Ref(s), key, hash));
-
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key) }
-            }
-        }
+        key.1
     }
 
     /// Try and resolve the slice associated with this [`Key`].
