@@ -29,9 +29,24 @@ use std::{
 /// Support for interning more than just string slices
 pub mod slice;
 
+#[cfg(feature = "serde")]
+mod serde;
+#[cfg(not(feature = "serde"))]
+mod serde {
+    #[macro_export]
+    macro_rules! custom_key_serde {
+        ($key:ident) => {};
+    }
+
+    pub use custom_key_serde;
+}
+
 #[doc(hidden)]
 pub mod __private {
     pub use foldhash::fast::RandomState;
+    pub mod serde {
+        pub use crate::serde::*;
+    }
 }
 
 /// Create a new custom key, with a static-backed allocator.
@@ -144,6 +159,8 @@ macro_rules! custom_key {
                 Self::paracord().iter().map(|(k, s)| (Self(k), s))
             }
         }
+
+        $crate::__private::serde::custom_key_serde!($key);
     };
 }
 
@@ -339,8 +356,8 @@ mod tests {
         thread,
     };
 
-    use crate::Key;
     use crate::ParaCord;
+    use crate::{DefaultKey, Key};
 
     #[test]
     fn works() {
@@ -631,5 +648,14 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serde() {
+        let key = DefaultKey::get_or_intern("hello");
+
+        serde_test::assert_de_tokens(&key, &[serde_test::Token::Str("hello")]);
+        serde_test::assert_ser_tokens(&key, &[serde_test::Token::Str("hello")]);
     }
 }

@@ -1,13 +1,17 @@
 
 [package]
 name = "paracord"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 edition = "2021"
 license = "Apache-2.0"
 description = "A fast, simple, multi-threaded string interning library"
 authors = ["Conrad Ludgate <conradludgate@gmail.com>"]
 repository = "https://github.com/conradludgate/paracord"
 rust-version = "1.73.0"
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
 
 [dependencies]
 boxcar = "0.2"
@@ -17,4 +21,7 @@ typed-arena = "2"
 hashbrown = { version = "0.15", default-features = false }
 sync_wrapper = "1"
 
+serde = { version = "1", optional = true }
+
 [dev-dependencies]
+serde_test = { version = "1" }

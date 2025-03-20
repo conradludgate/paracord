@@ -7,7 +7,6 @@ use std::{
 use alloc::Alloc;
 use clashmap::ClashCollection;
 use hashbrown::HashTable;
-use sync_wrapper::SyncWrapper;
 
 use crate::Key;
 
@@ -35,7 +34,7 @@ pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
 
 struct Collection<T: 'static + Sync> {
     table: HashTable<TableEntry<T>>,
-    alloc: SyncWrapper<Alloc<T>>,
+    alloc: Alloc<T>,
 }
 
 impl<T: 'static + Sync> Default for Collection<T> {
@@ -164,7 +163,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
                 .iter_mut()
                 .fold(acc, |acc, shard| {
                     let shard = shard.get_mut();
-                    acc + shard.table.allocation_size() + shard.alloc.get_mut().size()
+                    acc + shard.table.allocation_size() + shard.alloc.size()
                 })
         };
 
