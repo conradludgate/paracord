@@ -5,7 +5,7 @@ use std::{
 };
 
 use alloc::Alloc;
-use clashmap::sharded::ClashCollection;
+use clashmap::ClashCollection;
 use hashbrown::HashTable;
 use sync_wrapper::SyncWrapper;
 

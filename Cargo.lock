@@ -97,7 +97,8 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 [[package]]
 name = "clashmap"
 version = "1.2.0"
-source = "git+https://github.com/conradludgate/clashmap?branch=conrad/clashcollections#f724badee203861b16f90b1be229cd2a50ec16a9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8a055b1f1bf558eae4959f6dd77cf2d7d50ae1483928e60ef21ca5a24fd4321"
 dependencies = [
  "crossbeam-utils",
  "hashbrown 0.15.2",
@@ -318,7 +319,7 @@ checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
 name = "paracord"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "boxcar",
  "clashmap",

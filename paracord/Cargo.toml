@@ -1,7 +1,7 @@
 
 [package]
 name = "paracord"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 edition = "2021"
 license = "Apache-2.0"
 description = "A fast, simple, multi-threaded string interning library"
@@ -12,7 +12,7 @@ rust-version = "1.73.0"
 [dependencies]
 boxcar = "0.2"
 foldhash = "0.1"
-clashmap = { version = "1.2", features = ["raw-api"], git = "https://github.com/conradludgate/clashmap", branch = "conrad/clashcollections" }
+clashmap = { version = "1.2", features = ["raw-api"] }
 typed-arena = "2"
 hashbrown = { version = "0.15", default-features = false }
 sync_wrapper = "1"
