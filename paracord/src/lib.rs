@@ -29,8 +29,6 @@ use std::{
 /// Support for interning more than just string slices
 pub mod slice;
 
-mod send_if_sync;
-
 #[doc(hidden)]
 pub mod __private {
     pub use foldhash::fast::RandomState;
@@ -118,12 +116,6 @@ macro_rules! custom_key {
 
             /// Try and get the key associated with the given string.
             /// Allocates a new key if not found.
-            ///
-            /// ## Thread local
-            ///
-            /// This employs a thread local allocation strategy.
-            /// This might cause undesired memory fragmentation and amplification
-            /// if called from hundreds of threads.
             pub fn get_or_intern(s: &str) -> Self {
                 Self(Self::paracord().get_or_intern(s))
             }
@@ -159,6 +151,16 @@ custom_key!(
     /// A key that allocates in a global [`ParaCord`] instance.
     ///
     /// Custom global keys can be defined using [`custom_key`]
+    ///
+    /// ```
+    /// use paracord::DefaultKey;
+    ///
+    /// let key = DefaultKey::get_or_intern("foo");
+    /// assert_eq!(key.resolve(), "foo");
+    ///
+    /// let key2 = DefaultKey::get("foo").unwrap();
+    /// assert_eq!(key, key2);
+    /// ```
     pub struct DefaultKey;
 );
 
@@ -251,12 +253,6 @@ impl<S: BuildHasher> ParaCord<S> {
 
     /// Try and get the [`Key`] associated with the given string.
     /// Allocates a new key if not found.
-    ///
-    /// ## Thread local
-    ///
-    /// This employs a thread local allocation strategy.
-    /// This might cause undesired memory fragmentation and amplification
-    /// if called from hundreds of threads.
     pub fn get_or_intern(&self, s: &str) -> Key {
         self.inner.get_or_intern(s.as_bytes())
     }
@@ -533,6 +529,26 @@ mod tests {
         thread::spawn(move || {
             let _ = moved;
         });
+    }
+
+    #[test]
+    fn memory() {
+        let mut rodeo = ParaCord::default();
+        rodeo.get_or_intern("A");
+        rodeo.get_or_intern("B");
+        rodeo.get_or_intern("C");
+
+        assert!(rodeo.current_memory_usage() > 0);
+    }
+
+    #[test]
+    fn reset() {
+        let mut rodeo = ParaCord::default();
+        let k1 = rodeo.get_or_intern("A");
+        rodeo.reset();
+
+        assert!(rodeo.try_resolve(k1).is_none());
+        assert!(rodeo.is_empty());
     }
 
     // #[test]

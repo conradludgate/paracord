@@ -3,14 +3,14 @@ use std::{
     mem::MaybeUninit,
 };
 
-use clashmap::tableref::{entry::Entry, entrymut::EntryMut};
+use hashbrown::hash_table::Entry;
 use typed_arena::Arena;
 
-use crate::{send_if_sync::SendIfSync, slice::ParaCord, Key};
+use crate::{slice::ParaCord, Key};
 
 use super::TableEntry;
 
-pub(super) struct Alloc<T>(Arena<SendIfSync<T>>);
+pub(super) struct Alloc<T>(Arena<T>);
 
 impl<T> Default for Alloc<T> {
     fn default() -> Self {
@@ -18,11 +18,13 @@ impl<T> Default for Alloc<T> {
     }
 }
 
-impl<T: Copy> Alloc<T> {
+impl<T> Alloc<T> {
     pub(super) fn size(&self) -> usize {
         self.0.len() * std::mem::size_of::<T>()
     }
+}
 
+impl<T: Copy> Alloc<T> {
     #[inline]
     unsafe fn alloc(&self, s: &[T]) -> &'static [T] {
         /// Polyfill for [`MaybeUninit::copy_from_slice`]
@@ -43,10 +45,8 @@ impl<T: Copy> Alloc<T> {
             unsafe { &mut *(slice as *mut [MaybeUninit<T>] as *mut [T]) }
         }
 
-        let s = SendIfSync::cast_from_slice(s);
         // Safety: we are making sure to init all the elements without panicking.
         let s = copy_from_slice(unsafe { self.0.alloc_uninitialized(s.len()) }, s);
-        let s = SendIfSync::cast_to_slice(s);
 
         // SAFETY: caller will not drop alloc until it drops the containers storing this
         unsafe { &*(s as *const [T]) }
@@ -56,11 +56,12 @@ impl<T: Copy> Alloc<T> {
 impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     #[cold]
     pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
-        match self.slice_to_keys.entry(hash, |k| s == k.slice, |k| k.hash) {
+        let shard = &mut *self.slice_to_keys.get_write_shard(hash);
+        match shard.table.entry(hash, |k| s == k.slice, |k| k.hash) {
             Entry::Occupied(entry) => entry.get().key,
             Entry::Vacant(entry) => {
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { self.alloc.get_or_default().alloc(s) };
+                let s = unsafe { shard.alloc.get_mut().alloc(s) };
 
                 let key = self.keys_to_slice.push(s);
                 let key = Key::from_index(key);
@@ -78,19 +79,12 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 
     #[cold]
     pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
-        match self
-            .slice_to_keys
-            .entry_mut(hash, |k| s == k.slice, |k| k.hash)
-        {
-            EntryMut::Occupied(entry) => entry.get().key,
-            EntryMut::Vacant(entry) => {
-                let alloca = match self.alloc.iter_mut().next() {
-                    Some(alloc) => alloc,
-                    None => self.alloc.get_or_default(),
-                };
-
+        let shard = &mut *self.slice_to_keys.get_mut(hash);
+        match shard.table.entry(hash, |k| s == k.slice, |k| k.hash) {
+            Entry::Occupied(entry) => entry.get().key,
+            Entry::Vacant(entry) => {
                 // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { alloca.alloc(s) };
+                let s = unsafe { shard.alloc.get_mut().alloc(s) };
 
                 let key = self.keys_to_slice.push(s);
                 let key = Key::from_index(key);
