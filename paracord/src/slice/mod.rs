@@ -2,13 +2,12 @@ use std::{
     hash::{BuildHasher, Hash},
     mem::size_of,
     ops::Index,
-    thread::available_parallelism,
 };
 
 use alloc::Alloc;
-use clashmap::ClashTable;
-use thread_local::ThreadLocal;
-use typesize::TypeSize;
+use clashmap::sharded::ClashCollection;
+use hashbrown::HashTable;
+use sync_wrapper::SyncWrapper;
 
 use crate::Key;
 
@@ -30,9 +29,22 @@ mod alloc;
 /// until the [`ParaCord`] instance is dropped.
 pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
-    slice_to_keys: ClashTable<TableEntry<T>>,
-    alloc: ThreadLocal<Alloc<T>>,
+    slice_to_keys: ClashCollection<Collection<T>>,
     hasher: S,
+}
+
+struct Collection<T: 'static + Sync> {
+    table: HashTable<TableEntry<T>>,
+    alloc: SyncWrapper<Alloc<T>>,
+}
+
+impl<T: 'static + Sync> Default for Collection<T> {
+    fn default() -> Self {
+        Self {
+            table: Default::default(),
+            alloc: Default::default(),
+        }
+    }
 }
 
 struct TableEntry<T: 'static> {
@@ -40,8 +52,6 @@ struct TableEntry<T: 'static> {
     key: Key,
     hash: u64,
 }
-
-impl<T> TypeSize for TableEntry<T> {}
 
 impl<T: Sync + 'static + Sync> Default for ParaCord<T> {
     fn default() -> Self {
@@ -54,8 +64,7 @@ impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             keys_to_slice: boxcar::Vec::default(),
-            slice_to_keys: ClashTable::new(),
-            alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
+            slice_to_keys: ClashCollection::default(),
             hasher,
         }
     }
@@ -66,26 +75,24 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Returns [`None`] if not found.
     pub fn get(&self, s: &[T]) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
-        let key = self.slice_to_keys.find(hash, |k| s == k.slice)?;
-        // SAFETY: we assume the key is correct given its existence in the set
-        Some(key.key)
+        let shard = self.slice_to_keys.get_read_shard(hash);
+        shard.table.find(hash, |k| s == k.slice).map(|k| k.key)
     }
 
     /// Try and get the [`Key`] associated with the given slice.
     /// Allocates a new key if not found.
-    ///
-    /// ## Thread local
-    ///
-    /// This employs a thread local allocation strategy.
-    /// This might cause undesired memory fragmentation and amplification
-    /// if called from hundreds of threads.
     pub fn get_or_intern(&self, s: &[T]) -> Key {
         let hash = self.hasher.hash_one(s);
-        let Some(key) = self.slice_to_keys.find(hash, |k| s == k.slice) else {
+
+        let key = {
+            let shard = self.slice_to_keys.get_read_shard(hash);
+            shard.table.find(hash, |k| s == k.slice).map(|k| k.key)
+        };
+
+        let Some(key) = key else {
             return self.intern_slow(s, hash);
         };
-        // SAFETY: we assume the key is correct given its existence in the set
-        key.key
+        key
     }
 
     /// Try and resolve the slice associated with this [`Key`].
@@ -140,17 +147,28 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Deallocate all interned slices, but can retain some allocated memory
     pub fn reset(&mut self) {
         self.keys_to_slice.clear();
-        self.slice_to_keys.clear();
-        self.alloc.iter_mut().for_each(|b| drop(core::mem::take(b)));
+        self.slice_to_keys.shards_mut().iter_mut().for_each(|s| {
+            s.get_mut().table.clear();
+            drop(core::mem::take(&mut s.get_mut().alloc))
+        });
     }
 
     /// Determine how much space has been used to allocate all the slices.
     pub fn current_memory_usage(&mut self) -> usize {
-        use typesize::TypeSize;
-        size_of::<Self>()
-            + self.keys_to_slice.count() * size_of::<*const str>()
-            + self.slice_to_keys.extra_size()
-            + self.alloc.iter_mut().map(|b| b.size()).sum::<usize>()
+        let keys_size = self.keys_to_slice.count() * size_of::<*const str>();
+
+        let shards_size = {
+            let acc = core::mem::size_of_val(self.slice_to_keys.shards());
+            self.slice_to_keys
+                .shards_mut()
+                .iter_mut()
+                .fold(acc, |acc, shard| {
+                    let shard = shard.get_mut();
+                    acc + shard.table.allocation_size() + shard.alloc.get_mut().size()
+                })
+        };
+
+        size_of::<Self>() + keys_size + shards_size
     }
 }
 
@@ -163,8 +181,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Defau
 
         let mut this = Self {
             keys_to_slice: boxcar::Vec::with_capacity(len),
-            slice_to_keys: ClashTable::with_capacity(len),
-            alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
+            slice_to_keys: ClashCollection::default(),
             hasher: S::default(),
         };
         this.extend(iter);
@@ -193,8 +210,7 @@ impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for crate::ParaCor
         let mut this = Self {
             inner: ParaCord {
                 keys_to_slice: boxcar::Vec::with_capacity(len),
-                slice_to_keys: ClashTable::with_capacity(len),
-                alloc: ThreadLocal::with_capacity(available_parallelism().map_or(0, |x| x.get())),
+                slice_to_keys: ClashCollection::default(),
                 hasher: S::default(),
             },
         };

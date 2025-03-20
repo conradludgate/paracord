@@ -96,9 +96,8 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "clashmap"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "493813911581529769671b1b160b968315aac7b4c2f15d3b75658a8f8fb31e17"
+version = "1.2.0"
+source = "git+https://github.com/conradludgate/clashmap?branch=conrad/clashcollections#f724badee203861b16f90b1be229cd2a50ec16a9"
 dependencies = [
  "crossbeam-utils",
  "hashbrown 0.15.2",
@@ -106,7 +105,6 @@ dependencies = [
  "parking_lot_core",
  "polonius-the-crab",
  "replace_with",
- "typesize",
 ]
 
 [[package]]
@@ -325,9 +323,9 @@ dependencies = [
  "boxcar",
  "clashmap",
  "foldhash",
- "thread_local",
+ "hashbrown 0.15.2",
+ "sync_wrapper",
  "typed-arena",
- "typesize",
 ]
 
 [[package]]
@@ -522,6 +520,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_wrapper"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+
+[[package]]
 name = "terminal_size"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -595,26 +599,6 @@ name = "typed-arena"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
-
-[[package]]
-name = "typesize"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e29e4cac0f1acdbbe7b4deb46876a04246dc6abf60b6f2587bef8ae327cd134c"
-dependencies = [
- "typesize-derive",
-]
-
-[[package]]
-name = "typesize-derive"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "536b6812192bda8551cfa0e52524e328c6a951b48e66529ee4522d6c721243d6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "unicode-ident"
