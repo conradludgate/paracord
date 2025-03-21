@@ -47,28 +47,28 @@ mod paracord {
     #[divan::bench]
     fn get_or_intern(b: Bencher) {
         b.with_inputs(|| fastrand::u32(10000000..=99999999).to_string())
-            .bench_refs(|s| black_box_drop(Global::get_or_intern(s)));
+            .bench_refs(|s| black_box_drop(Global::from_str_or_intern(s)));
     }
 
     #[divan::bench]
     fn get(b: Bencher) {
         for x in 100000..=999999 {
-            Global::get_or_intern(&x.to_string());
+            Global::from_str_or_intern(&x.to_string());
         }
 
         b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-            .bench_refs(|s| black_box_drop(Global::get(s).unwrap()));
+            .bench_refs(|s| black_box_drop(Global::try_from_str(s).unwrap()));
     }
 
     #[divan::bench]
     fn resolve(b: Bencher) {
         let mut keys = vec![];
         for x in 100000..=999999 {
-            keys.push(Global::get_or_intern(&x.to_string()));
+            keys.push(Global::from_str_or_intern(&x.to_string()));
         }
 
         b.with_inputs(|| *fastrand::choice(&keys).unwrap())
-            .bench_values(|key| black_box_drop(key.resolve()));
+            .bench_values(|key| black_box_drop(key.as_str()));
     }
 }
 

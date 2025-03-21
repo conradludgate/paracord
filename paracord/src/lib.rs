@@ -61,10 +61,10 @@ pub mod __private {
 ///     pub struct MyKey;
 /// );
 ///
-/// let key = MyKey::get_or_intern("foo");
-/// assert_eq!(key.resolve(), "foo");
+/// let key = MyKey::from_str_or_intern("foo");
+/// assert_eq!(key.as_str(), "foo");
 ///
-/// let key2 = MyKey::get("foo").unwrap();
+/// let key2 = MyKey::try_from_str("foo").unwrap();
 /// assert_eq!(key, key2);
 /// ```
 ///
@@ -125,18 +125,18 @@ macro_rules! custom_key {
 
             /// Try and get the key associated with the given string.
             /// Returns [`None`] if not found.
-            pub fn get(s: &str) -> Option<Self> {
+            pub fn try_from_str(s: &str) -> Option<Self> {
                 Self::paracord().get(s).map(Self)
             }
 
             /// Try and get the key associated with the given string.
             /// Allocates a new key if not found.
-            pub fn get_or_intern(s: &str) -> Self {
+            pub fn from_str_or_intern(s: &str) -> Self {
                 Self(Self::paracord().get_or_intern(s))
             }
 
             /// Resolve the string associated with this key.
-            pub fn resolve(self) -> &'static str {
+            pub fn as_str(&self) -> &'static str {
                 // Safety: The key can only be constructed from the static paracord,
                 // and the paracord will never be reset.
                 unsafe { Self::paracord().resolve_unchecked(self.0) }
@@ -160,6 +160,18 @@ macro_rules! custom_key {
             }
         }
 
+        impl ::core::fmt::Display for $key {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl ::core::convert::AsRef<str> for $key {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
         $crate::__private::serde::custom_key_serde!($key);
     };
 }
@@ -172,10 +184,10 @@ custom_key!(
     /// ```
     /// use paracord::DefaultKey;
     ///
-    /// let key = DefaultKey::get_or_intern("foo");
-    /// assert_eq!(key.resolve(), "foo");
+    /// let key = DefaultKey::from_str_or_intern("foo");
+    /// assert_eq!(key.as_str(), "foo");
     ///
-    /// let key2 = DefaultKey::get("foo").unwrap();
+    /// let key2 = DefaultKey::try_from_str("foo").unwrap();
     /// assert_eq!(key, key2);
     /// ```
     pub struct DefaultKey;
@@ -653,9 +665,41 @@ mod tests {
     #[test]
     #[cfg(feature = "serde")]
     fn serde() {
-        let key = DefaultKey::get_or_intern("hello");
+        let key = DefaultKey::from_str_or_intern("hello");
 
         serde_test::assert_de_tokens(&key, &[serde_test::Token::Str("hello")]);
         serde_test::assert_ser_tokens(&key, &[serde_test::Token::Str("hello")]);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn memory_usage() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+        use rand_distr::Zipf;
+
+        let endpoint_dist = Zipf::new(500000.0, 0.8).unwrap();
+        let endpoints = StdRng::seed_from_u64(272488357).sample_iter(endpoint_dist);
+
+        let mut interner = ParaCord::default();
+
+        const N: usize = 1_000_000;
+        let mut verify = Vec::with_capacity(N);
+        for endpoint in endpoints.take(N) {
+            let endpoint = format!("ep-string-interning-{endpoint}");
+            let key = interner.get_or_intern(&endpoint);
+            verify.push((endpoint, key));
+        }
+
+        for (s, key) in verify {
+            assert_eq!(interner[key], s);
+        }
+
+        let mem = interner.current_memory_usage();
+        let len = interner.len();
+
+        // average 86 bytes per string.
+        // average string length is 24, so 62 bytes overhead.
+        assert_eq!(mem / len, 86);
     }
 }

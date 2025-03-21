@@ -26,13 +26,13 @@ mod alloc;
 ///
 /// This slice interner is not garbage collected, so slices that are allocated in the interner are not released
 /// until the [`ParaCord`] instance is dropped.
-pub struct ParaCord<T: 'static + Sync, S = foldhash::fast::RandomState> {
+pub struct ParaCord<T: 'static, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
     slice_to_keys: ClashCollection<Collection<T>>,
     hasher: S,
 }
 
-struct Collection<T: 'static + Sync> {
+struct Collection<T: 'static> {
     table: HashTable<TableEntry<T>>,
     alloc: Alloc<T>,
 }
@@ -46,13 +46,36 @@ impl<T: 'static + Sync> Default for Collection<T> {
     }
 }
 
-struct TableEntry<T: 'static> {
-    slice: &'static [T],
-    key: Key,
+struct TableEntry<T> {
     hash: u64,
+    key: Key,
+    len: u32,
+    ptr: *const T,
 }
 
-impl<T: Sync + 'static + Sync> Default for ParaCord<T> {
+// Safety: `TableEntry` has the same safety requirements as `&[T]`
+unsafe impl<T: Sync> Sync for TableEntry<T> {}
+// Safety: `TableEntry` has the same safety requirements as `&[T]`
+unsafe impl<T: Sync> Send for TableEntry<T> {}
+
+impl<T: 'static + Eq> TableEntry<T> {
+    fn new(s: &'static [T], key: Key, hash: u64) -> Self {
+        let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
+        TableEntry {
+            hash,
+            key,
+            len,
+            ptr: s.as_ptr(),
+        }
+    }
+
+    fn slice(&self) -> &'static [T] {
+        // Safety: the ptr and len came from a &'static [T] to begin with.
+        unsafe { &*core::ptr::slice_from_raw_parts(self.ptr, self.len as usize) }
+    }
+}
+
+impl<T: 'static + Sync + Copy> Default for ParaCord<T> {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
@@ -75,7 +98,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     pub fn get(&self, s: &[T]) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
         let shard = self.slice_to_keys.get_read_shard(hash);
-        shard.table.find(hash, |k| s == k.slice).map(|k| k.key)
+        shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
     }
 
     /// Try and get the [`Key`] associated with the given slice.
@@ -85,7 +108,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 
         let key = {
             let shard = self.slice_to_keys.get_read_shard(hash);
-            shard.table.find(hash, |k| s == k.slice).map(|k| k.key)
+            shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
         };
 
         let Some(key) = key else {

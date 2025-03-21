@@ -33,7 +33,7 @@ macro_rules! custom_key_serde {
                 where
                     S: Serializer,
                 {
-                    serializer.serialize_str(self.resolve())
+                    serializer.serialize_str(self.as_str())
                 }
             }
 
