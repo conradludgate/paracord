@@ -73,17 +73,20 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         match shard.table.entry(hash, |k| s == k.slice(), |k| k.hash) {
             Entry::Occupied(entry) => entry.get().key,
             Entry::Vacant(entry) => {
-                let s = shard.alloc.alloc(s);
+                let key = self.keys_to_slice.push_with(|key| {
+                    let key = Key::from_index(key);
 
-                // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { &*(s as *const [T]) };
+                    let s = shard.alloc.alloc(s);
 
-                let key = self.keys_to_slice.push(s);
-                let key = Key::from_index(key);
-                entry.insert(TableEntry::new(s, key, hash));
+                    // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
+                    let s = unsafe { &*(s as *const [T]) };
+
+                    entry.insert(TableEntry::new(s, key, hash));
+                    s
+                });
 
                 // SAFETY: as asserted the key is correct
-                key
+                unsafe { Key::new_unchecked(key as u32) }
             }
         }
     }
@@ -96,17 +99,20 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         match shard.table.entry(hash, |k| s == k.slice(), |k| k.hash) {
             Entry::Occupied(entry) => entry.get().key,
             Entry::Vacant(entry) => {
-                let s = shard.alloc.alloc(s);
+                let key = self.keys_to_slice.push_with(|key| {
+                    let key = Key::from_index(key);
 
-                // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                let s = unsafe { &*(s as *const [T]) };
+                    let s = shard.alloc.alloc(s);
 
-                let key = self.keys_to_slice.push(s);
-                let key = Key::from_index(key);
-                entry.insert(TableEntry::new(s, key, hash));
+                    // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
+                    let s = unsafe { &*(s as *const [T]) };
+
+                    entry.insert(TableEntry::new(s, key, hash));
+                    s
+                });
 
                 // SAFETY: as asserted the key is correct
-                key
+                unsafe { Key::new_unchecked(key as u32) }
             }
         }
     }
