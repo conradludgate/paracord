@@ -1,4 +1,3 @@
-
 /// Create a new custom key, with a static-backed allocator.
 ///
 /// See [`DefaultKey`](crate::DefaultKey) for docs on what this macro generates.
@@ -124,4 +123,23 @@ macro_rules! custom_key {
 
         $crate::__private::serde::custom_key_serde!($key);
     };
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn misc() {
+        custom_key!(pub struct Foo);
+
+        assert!(Foo::is_empty());
+
+        let _foo = Foo::from_str_or_intern("foo");
+        let foo = Foo::try_from_str("foo").unwrap();
+
+        assert_eq!(foo.to_string(), "foo");
+        assert_eq!(foo.as_ref(), "foo");
+        assert_eq!(Foo::len(), 1);
+        let keys: Vec<_> = Foo::iter().collect();
+        assert_eq!(keys, [(foo, "foo")]);
+    }
 }
