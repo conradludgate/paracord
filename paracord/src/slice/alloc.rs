@@ -1,6 +1,6 @@
 use std::{
     hash::{BuildHasher, Hash},
-    mem::{ManuallyDrop, MaybeUninit},
+    mem::MaybeUninit,
 };
 
 use hashbrown::hash_table::Entry;
@@ -9,16 +9,13 @@ use typed_arena::Arena;
 
 use crate::{slice::ParaCord, Key};
 
-use super::TableEntry;
+use super::{TableEntry, VecEntry};
 
-pub(super) struct Alloc<T>(SyncWrapper<Arena<ManuallyDrop<T>>>);
-
-// Safety: We never give out `&mut T` access from the arena, so T only needs to be `Sync`.
-unsafe impl<T: Sync> Send for Alloc<T> {}
+pub(super) struct Alloc<T>(SyncWrapper<Arena<T>>);
 
 impl<T> Default for Alloc<T> {
     fn default() -> Self {
-        Self(Default::default())
+        Self(SyncWrapper::new(Arena::new()))
     }
 }
 
@@ -26,13 +23,6 @@ impl<T> Alloc<T> {
     pub(super) fn size(&mut self) -> usize {
         self.0.get_mut().len() * std::mem::size_of::<T>()
     }
-}
-
-const fn manually_drop_cast_slice_uninit_mut<T>(
-    slice: &mut [MaybeUninit<ManuallyDrop<T>>],
-) -> &mut [MaybeUninit<T>] {
-    // Safety: MaybeUninit/ManuallyDrop are transparent
-    unsafe { &mut *(slice as *mut [MaybeUninit<ManuallyDrop<T>>] as *mut [MaybeUninit<T>]) }
 }
 
 impl<T: Copy> Alloc<T> {
@@ -60,11 +50,11 @@ impl<T: Copy> Alloc<T> {
 
         // Safety: we are making sure to init all the elements without panicking.
         let uninit = unsafe { arena.alloc_uninitialized(s.len()) };
-        copy_from_slice(manually_drop_cast_slice_uninit_mut(uninit), s)
+        copy_from_slice(uninit, s)
     }
 }
 
-impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
+impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     #[cold]
     pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
@@ -75,12 +65,8 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
             Entry::Vacant(entry) => {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
-
                     let s = shard.alloc.alloc(s);
-
-                    // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                    let s = unsafe { &*(s as *const [T]) };
-
+                    let s = VecEntry::new(s);
                     entry.insert(TableEntry::new(s, key, hash));
                     s
                 });
@@ -101,12 +87,8 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
             Entry::Vacant(entry) => {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
-
                     let s = shard.alloc.alloc(s);
-
-                    // SAFETY: we will not drop bump until we drop the containers storing these `&'static [T]`.
-                    let s = unsafe { &*(s as *const [T]) };
-
+                    let s = VecEntry::new(s);
                     entry.insert(TableEntry::new(s, key, hash));
                     s
                 });

@@ -76,18 +76,18 @@ mod alloc;
 /// assert_eq!(paracord.resolve(foo), &[1,2,3,4]);
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
-pub struct ParaCord<T: 'static, S = foldhash::fast::RandomState> {
-    keys_to_slice: boxcar::Vec<&'static [T]>,
+pub struct ParaCord<T, S = foldhash::fast::RandomState> {
+    keys_to_slice: boxcar::Vec<VecEntry<T>>,
     slice_to_keys: ClashCollection<Collection<T>>,
     hasher: S,
 }
 
-struct Collection<T: 'static> {
+struct Collection<T> {
     table: HashTable<TableEntry<T>>,
     alloc: Alloc<T>,
 }
 
-impl<T: 'static + Sync> Default for Collection<T> {
+impl<T> Default for Collection<T> {
     fn default() -> Self {
         Self {
             table: Default::default(),
@@ -108,30 +108,55 @@ unsafe impl<T: Sync> Sync for TableEntry<T> {}
 // Safety: `TableEntry` has the same safety requirements as `&[T]`
 unsafe impl<T: Sync> Send for TableEntry<T> {}
 
-impl<T: 'static + Eq> TableEntry<T> {
-    fn new(s: &'static [T], key: Key, hash: u64) -> Self {
-        let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
-        TableEntry {
+#[derive(Clone, Copy)]
+struct VecEntry<T> {
+    len: u32,
+    ptr: *const T,
+}
+
+// Safety: `VecEntry` has the same safety requirements as `&[T]`
+unsafe impl<T: Sync> Sync for VecEntry<T> {}
+// Safety: `VecEntry` has the same safety requirements as `&[T]`
+unsafe impl<T: Sync> Send for VecEntry<T> {}
+
+impl<T: Eq> TableEntry<T> {
+    fn new(s: VecEntry<T>, key: Key, hash: u64) -> Self {
+        Self {
             hash,
             key,
+            len: s.len,
+            ptr: s.ptr,
+        }
+    }
+
+    fn slice(&self) -> &[T] {
+        // Safety: the ptr and len came from a &[T] to begin with.
+        unsafe { &*core::ptr::slice_from_raw_parts(self.ptr, self.len as usize) }
+    }
+}
+
+impl<T: Eq> VecEntry<T> {
+    fn new(s: &[T]) -> Self {
+        let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
+        Self {
             len,
             ptr: s.as_ptr(),
         }
     }
 
-    fn slice(&self) -> &'static [T] {
-        // Safety: the ptr and len came from a &'static [T] to begin with.
+    fn slice(&self) -> &[T] {
+        // Safety: the ptr and len came from a &[T] to begin with.
         unsafe { &*core::ptr::slice_from_raw_parts(self.ptr, self.len as usize) }
     }
 }
 
-impl<T: 'static + Sync + Copy> Default for ParaCord<T> {
+impl<T: Copy> Default for ParaCord<T> {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
 }
 
-impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
+impl<T, S: BuildHasher> ParaCord<T, S> {
     /// Create a new `ParaCord` instance with the given hasher state.
     ///
     /// # Examples
@@ -154,7 +179,7 @@ impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
     }
 }
 
-impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
+impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Try and get the [`Key`] associated with the given slice.
     /// Returns [`None`] if not found.
     ///
@@ -211,7 +236,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// as well.
     pub fn try_resolve(&self, key: Key) -> Option<&[T]> {
         let s = self.keys_to_slice.get(key.into_repr() as usize)?;
-        Some(*s)
+        Some(s.slice())
     }
 
     /// Resolve the slice associated with this [`Key`].
@@ -221,7 +246,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// a different [`ParaCord`] instance, but it might return an arbitrary slice
     /// as well.
     pub fn resolve(&self, key: Key) -> &[T] {
-        self.keys_to_slice[key.into_repr() as usize]
+        self.keys_to_slice[key.into_repr() as usize].slice()
     }
 
     /// Resolve the slice associated with this [`Key`].
@@ -231,7 +256,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// and [`ParaCord::reset`] must not have been called.
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &[T] {
         // Safety: If the key was allocated in self, then key is inbounds.
-        unsafe { self.keys_to_slice.get_unchecked(key.into_repr() as usize) }
+        unsafe { self.keys_to_slice.get_unchecked(key.into_repr() as usize) }.slice()
     }
 
     /// Determine how many slices have been allocated
@@ -250,7 +275,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         self.keys_to_slice
             .iter()
             // SAFETY: we assume the key is correct given its existence in the set
-            .map(|(key, s)| unsafe { (Key::new_unchecked(key as u32), &**s) })
+            .map(|(key, s)| unsafe { (Key::new_unchecked(key as u32), s.slice()) })
     }
 
     /// Deallocate all interned slices, but can retain some allocated memory
@@ -281,7 +306,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     }
 }
 
-impl<T: 'static + Sync + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<I>
+impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<I>
     for ParaCord<T, S>
 {
     fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
@@ -298,9 +323,7 @@ impl<T: 'static + Sync + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Defau
     }
 }
 
-impl<T: 'static + Sync + Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I>
-    for ParaCord<T, S>
-{
+impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I> for ParaCord<T, S> {
     fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
         // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
         for s in iter {
@@ -344,5 +367,23 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCo
 
     fn index(&self, index: Key) -> &Self::Output {
         self.resolve(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParaCord;
+
+    fn is_send<T: Send>() {}
+    fn is_sync<T: Sync>() {}
+
+    fn inner_check_send_sync<T: 'static + Send + Sync>() {
+        is_send::<ParaCord<T>>();
+        is_sync::<ParaCord<T>>();
+    }
+
+    #[test]
+    fn check_send_sync() {
+        inner_check_send_sync::<()>();
     }
 }
