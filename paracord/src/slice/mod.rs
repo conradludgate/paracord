@@ -1,3 +1,28 @@
+//! Support for interning more than just string slices
+//!
+//! ```
+//! use paracord::slice::ParaCord;
+//!
+//! let paracord = ParaCord::default();
+//!
+//! let foo = paracord.get_or_intern(&[1,2,3,4]);
+//! let bar = paracord.get_or_intern(&[5,6,7,8]);
+//!
+//! assert_ne!(foo, bar);
+//!
+//! // returns the same key, no insert
+//! let foo2 = paracord.get_or_intern(&[1,2,3,4]);
+//! assert_eq!(foo, foo2);
+//!
+//! // returns the same key, guaranteed no insert
+//! let foo3 = paracord.get(&[1,2,3,4]).unwrap();
+//! assert_eq!(foo, foo3);
+//!
+//! // can be exchanged for the string
+//! assert_eq!(paracord.resolve(foo), &[1,2,3,4]);
+//! assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
+//! ```
+
 use std::{
     hash::{BuildHasher, Hash},
     mem::size_of,
@@ -26,6 +51,31 @@ mod alloc;
 ///
 /// This slice interner is not garbage collected, so slices that are allocated in the interner are not released
 /// until the [`ParaCord`] instance is dropped.
+///
+/// # Examples
+///
+/// ```
+/// use paracord::slice::ParaCord;
+///
+/// let paracord = ParaCord::default();
+///
+/// let foo = paracord.get_or_intern(&[1,2,3,4]);
+/// let bar = paracord.get_or_intern(&[5,6,7,8]);
+///
+/// assert_ne!(foo, bar);
+///
+/// // returns the same key, no insert
+/// let foo2 = paracord.get_or_intern(&[1,2,3,4]);
+/// assert_eq!(foo, foo2);
+///
+/// // returns the same key, guaranteed no insert
+/// let foo3 = paracord.get(&[1,2,3,4]).unwrap();
+/// assert_eq!(foo, foo3);
+///
+/// // can be exchanged for the string
+/// assert_eq!(paracord.resolve(foo), &[1,2,3,4]);
+/// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
+/// ```
 pub struct ParaCord<T: 'static, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<&'static [T]>,
     slice_to_keys: ClashCollection<Collection<T>>,
@@ -83,6 +133,18 @@ impl<T: 'static + Sync + Copy> Default for ParaCord<T> {
 
 impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
     /// Create a new `ParaCord` instance with the given hasher state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::slice::ParaCord;
+    /// use std::hash::RandomState;
+    ///
+    /// let paracord = ParaCord::with_hasher(RandomState::default());
+    ///
+    /// let foo = paracord.get_or_intern(&[1,2,3,4]);
+    /// assert_eq!(paracord.resolve(foo), &[1,2,3,4]);
+    /// ```
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             keys_to_slice: boxcar::Vec::default(),
@@ -95,6 +157,17 @@ impl<T: 'static + Sync, S: BuildHasher> ParaCord<T, S> {
 impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Try and get the [`Key`] associated with the given slice.
     /// Returns [`None`] if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::slice::ParaCord;
+    /// let paracord = ParaCord::default();
+    /// let foo = paracord.get_or_intern(&[1,2,3,4]);
+    ///
+    /// assert_eq!(paracord.get(&[1,2,3,4]), Some(foo));
+    /// assert_eq!(paracord.get(&[5,6,7,8]), None);
+    /// ```
     pub fn get(&self, s: &[T]) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
         let shard = self.slice_to_keys.get_read_shard(hash);
@@ -103,6 +176,20 @@ impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 
     /// Try and get the [`Key`] associated with the given slice.
     /// Allocates a new key if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::slice::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern(&[1,2,3,4]);
+    /// let bar = paracord.get_or_intern(&[5,6,7,8]);
+    /// let foo2 = paracord.get_or_intern(&[1,2,3,4]);
+    ///
+    /// assert_ne!(foo, bar);
+    /// assert_eq!(foo, foo2);
+    /// ```
     pub fn get_or_intern(&self, s: &[T]) -> Key {
         let hash = self.hasher.hash_one(s);
 

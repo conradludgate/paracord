@@ -12,6 +12,56 @@
 //!
 //! This string interner is not garbage collected, so strings that are allocated in the interner are not released
 //! until the [`ParaCord`] instance is dropped.
+//!
+//! # Examples
+//!
+//! With a self-managed `ParaCord` instance.
+//!
+//! ```
+//! use paracord::ParaCord;
+//!
+//! let paracord = ParaCord::default();
+//!
+//! let foo = paracord.get_or_intern("foo");
+//! let bar = paracord.get_or_intern("bar");
+//!
+//! assert_ne!(foo, bar);
+//!
+//! // returns the same key, no insert
+//! let foo2 = paracord.get_or_intern("foo");
+//! assert_eq!(foo, foo2);
+//!
+//! // returns the same key, guaranteed no insert
+//! let foo3 = paracord.get("foo").unwrap();
+//! assert_eq!(foo, foo3);
+//!
+//! // can be exchanged for the string
+//! assert_eq!(paracord.resolve(foo), "foo");
+//! assert_eq!(paracord.resolve(bar), "bar");
+//! ```
+//!
+//! With a globally managed instance, with typed keys
+//!
+//! ```
+//! paracord::custom_key!(pub struct NameKey);
+//!
+//! let foo = NameKey::from_str_or_intern("foo");
+//! let bar = NameKey::from_str_or_intern("bar");
+//!
+//! assert_ne!(foo, bar);
+//!
+//! // returns the same key, no insert
+//! let foo2 = NameKey::from_str_or_intern("foo");
+//! assert_eq!(foo, foo2);
+//!
+//! // returns the same key, guaranteed no insert
+//! let foo3 = NameKey::try_from_str("foo").unwrap();
+//! assert_eq!(foo, foo3);
+//!
+//! // can be exchanged for the string
+//! assert_eq!(foo.as_str(), "foo");
+//! assert_eq!(bar.as_str(), "bar");
+//! ```
 
 #![warn(
     unsafe_op_in_unsafe_fn,
@@ -26,13 +76,15 @@ use std::{
     ops::Index,
 };
 
-/// Support for interning more than just string slices
 pub mod slice;
+
+mod macros;
 
 #[cfg(feature = "serde")]
 mod serde;
 #[cfg(not(feature = "serde"))]
 mod serde {
+    #[doc(hidden)]
     #[macro_export]
     macro_rules! custom_key_serde {
         ($key:ident) => {};
@@ -47,133 +99,6 @@ pub mod __private {
     pub mod serde {
         pub use crate::serde::*;
     }
-}
-
-/// Create a new custom key, with a static-backed allocator.
-///
-/// See [`DefaultKey`] for docs on what this macro generates.
-///
-/// ## Create a custom key
-///
-/// ```
-/// paracord::custom_key!(
-///     /// My custom key
-///     pub struct MyKey;
-/// );
-///
-/// let key = MyKey::from_str_or_intern("foo");
-/// assert_eq!(key.as_str(), "foo");
-///
-/// let key2 = MyKey::try_from_str("foo").unwrap();
-/// assert_eq!(key, key2);
-/// ```
-///
-/// ## Create a custom key with a different default hasher
-///
-/// ```
-/// use foldhash::quality::RandomState;
-///
-/// paracord::custom_key!(
-///     /// My custom key
-///     pub struct MyKey;
-///
-///     let hasher: RandomState;
-/// );
-/// ```
-///
-/// ## Create a custom key with a different hasher and init function
-///
-/// ```
-/// use foldhash::quality::FixedState;
-///
-/// paracord::custom_key!(
-///     /// My custom key
-///     pub struct MyKey;
-///
-///     let hasher: FixedState = FixedState::with_seed(1);
-/// );
-/// ```
-#[macro_export]
-macro_rules! custom_key {
-    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident $(;)?) => {
-        $crate::custom_key!(
-            $(#[$($meta)*])*
-            $vis struct $key;
-
-            let hasher: $crate::__private::RandomState;
-        );
-    };
-    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty $(;)?) => {
-        $crate::custom_key!(
-            $(#[$($meta)*])*
-            $vis struct $key;
-
-            let hasher: $s = <$s as ::core::default::Default>::default();
-        );
-    };
-    ($(#[$($meta:meta)*])* $vis:vis struct $key:ident; let hasher: $s:ty = $init:expr $(;)?) => {
-        $(#[$($meta)*])*
-        #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
-        #[repr(transparent)]
-        $vis struct $key($crate::Key);
-
-        impl $key {
-            fn paracord() -> &'static $crate::ParaCord<$s> {
-                static S: ::std::sync::OnceLock<$crate::ParaCord<$s>> = ::std::sync::OnceLock::new();
-                S.get_or_init(|| $crate::ParaCord::with_hasher($init))
-            }
-
-            /// Try and get the key associated with the given string.
-            /// Returns [`None`] if not found.
-            pub fn try_from_str(s: &str) -> Option<Self> {
-                Self::paracord().get(s).map(Self)
-            }
-
-            /// Try and get the key associated with the given string.
-            /// Allocates a new key if not found.
-            pub fn from_str_or_intern(s: &str) -> Self {
-                Self(Self::paracord().get_or_intern(s))
-            }
-
-            /// Resolve the string associated with this key.
-            pub fn as_str(&self) -> &'static str {
-                // Safety: The key can only be constructed from the static paracord,
-                // and the paracord will never be reset.
-                unsafe { Self::paracord().resolve_unchecked(self.0) }
-            }
-
-            /// Determine how many strings have been allocated
-            pub fn len() -> usize {
-                Self::paracord().len()
-            }
-
-            /// Determine if no strings have been allocated
-            pub fn is_empty() -> bool {
-                Self::paracord().is_empty()
-            }
-
-            /// Get an iterator over every
-            #[doc = concat!("(`",stringify!($key),"`, `&str`)")]
-            /// pair that has been allocated in this [`ParaCord`] instance.
-            pub fn iter() -> impl Iterator<Item = (Self, &'static str)> {
-                Self::paracord().iter().map(|(k, s)| (Self(k), s))
-            }
-        }
-
-        impl ::core::fmt::Display for $key {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl ::core::convert::AsRef<str> for $key {
-            fn as_ref(&self) -> &str {
-                self.as_str()
-            }
-        }
-
-        $crate::__private::serde::custom_key_serde!($key);
-    };
 }
 
 custom_key!(
@@ -256,6 +181,31 @@ impl Key {
 ///
 /// This string interner is not garbage collected, so strings that are allocated in the interner are not released
 /// until the [`ParaCord`] instance is dropped.
+///
+/// # Examples
+///
+/// ```
+/// use paracord::ParaCord;
+///
+/// let paracord = ParaCord::default();
+///
+/// let foo = paracord.get_or_intern("foo");
+/// let bar = paracord.get_or_intern("bar");
+///
+/// assert_ne!(foo, bar);
+///
+/// // returns the same key, no insert
+/// let foo2 = paracord.get_or_intern("foo");
+/// assert_eq!(foo, foo2);
+///
+/// // returns the same key, guaranteed no insert
+/// let foo3 = paracord.get("foo").unwrap();
+/// assert_eq!(foo, foo3);
+///
+/// // can be exchanged for the string
+/// assert_eq!(paracord.resolve(foo), "foo");
+/// assert_eq!(paracord.resolve(bar), "bar");
+/// ```
 pub struct ParaCord<S = foldhash::fast::RandomState> {
     inner: slice::ParaCord<u8, S>,
 }
@@ -268,6 +218,18 @@ impl Default for ParaCord {
 
 impl<S: BuildHasher> ParaCord<S> {
     /// Create a new `ParaCord` instance with the given hasher state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// use std::hash::RandomState;
+    ///
+    /// let paracord = ParaCord::with_hasher(RandomState::default());
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// assert_eq!(paracord.resolve(foo), "foo");
+    /// ```
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             inner: slice::ParaCord::with_hasher(hasher),
@@ -276,12 +238,37 @@ impl<S: BuildHasher> ParaCord<S> {
 
     /// Try and get the [`Key`] associated with the given string.
     /// Returns [`None`] if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    /// let foo = paracord.get_or_intern("foo");
+    ///
+    /// assert_eq!(paracord.get("foo"), Some(foo));
+    /// assert_eq!(paracord.get("bar"), None);
+    /// ```
     pub fn get(&self, s: &str) -> Option<Key> {
         self.inner.get(s.as_bytes())
     }
 
     /// Try and get the [`Key`] associated with the given string.
     /// Allocates a new key if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// let bar = paracord.get_or_intern("bar");
+    /// let foo2 = paracord.get_or_intern("foo");
+    ///
+    /// assert_ne!(foo, bar);
+    /// assert_eq!(foo, foo2);
+    /// ```
     pub fn get_or_intern(&self, s: &str) -> Key {
         self.inner.get_or_intern(s.as_bytes())
     }
@@ -291,6 +278,19 @@ impl<S: BuildHasher> ParaCord<S> {
     /// This can only return `None` if given a key that was allocated from
     /// a different [`ParaCord`] instance, but it might return an arbitrary string
     /// as well.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// assert_eq!(paracord.try_resolve(foo), Some("foo"));
+    ///
+    /// let paracord = ParaCord::default();
+    /// assert_eq!(paracord.try_resolve(foo), None);
+    /// ```
     pub fn try_resolve(&self, key: Key) -> Option<&str> {
         self.inner
             .try_resolve(key)
@@ -304,6 +304,16 @@ impl<S: BuildHasher> ParaCord<S> {
     /// This can panic if given a key that was allocated from
     /// a different [`ParaCord`] instance, but it might return an arbitrary string
     /// as well.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// assert_eq!(paracord.resolve(foo), "foo");
+    /// ```
     pub fn resolve(&self, key: Key) -> &str {
         // Safety: we insert only strings, so it's valid utf8
         unsafe { core::str::from_utf8_unchecked(self.inner.resolve(key)) }
@@ -314,6 +324,18 @@ impl<S: BuildHasher> ParaCord<S> {
     /// # Safety
     /// This key must have been allocated in this paracord instance,
     /// and [`ParaCord::reset`] must not have been called.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// // Safety: `foo` was allocated within paracord just above,
+    /// // and we never reset the paracord instance.
+    /// assert_eq!(unsafe { paracord.resolve(foo) }, "foo");
+    /// ```
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &str {
         // Safety: from caller.
         let b = unsafe { self.inner.resolve_unchecked(key) };
@@ -323,17 +345,52 @@ impl<S: BuildHasher> ParaCord<S> {
     }
 
     /// Determine how many strings have been allocated
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let _ = paracord.get_or_intern("foo");
+    /// assert_eq!(paracord.len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     /// Determine if no strings have been allocated
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// assert!(paracord.is_empty());
+    ///
+    /// let _ = paracord.get_or_intern("foo");
+    /// assert!(!paracord.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     /// Get an iterator over every ([`Key`], [`&str`]) pair
     /// that has been allocated in this [`ParaCord`] instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// let bar = paracord.get_or_intern("bar");
+    ///
+    /// let entries: Vec<_> = paracord.iter().collect();
+    /// assert_eq!(entries, vec![(foo, "foo"), (bar, "bar")]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
         self.inner
             .iter()
@@ -342,11 +399,35 @@ impl<S: BuildHasher> ParaCord<S> {
     }
 
     /// Deallocate all interned strings, but can retain some allocated memory
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let mut paracord = ParaCord::default();
+    ///
+    /// let foo = paracord.get_or_intern("foo");
+    /// assert_eq!(paracord.try_resolve(foo), Some("foo"));
+    ///
+    /// paracord.reset();
+    /// assert!(paracord.is_empty());
+    ///
+    /// assert_eq!(paracord.try_resolve(foo), None);
+    /// ```
     pub fn reset(&mut self) {
         self.inner.reset();
     }
 
     /// Determine how much space has been used to allocate all the strings.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paracord::ParaCord;
+    /// let mut paracord = ParaCord::default();
+    ///
+    /// let _mem = paracord.current_memory_usage();
+    /// ```
     pub fn current_memory_usage(&mut self) -> usize {
         self.inner.current_memory_usage()
     }

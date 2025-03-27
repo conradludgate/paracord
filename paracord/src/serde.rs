@@ -20,6 +20,46 @@ impl<S: BuildHasher> Visitor<'_> for SerdeVisitor<'_, S> {
     }
 }
 
+// pub fn size_hint_cautious<Element>(hint: Option<usize>) -> usize {
+//     const MAX_PREALLOC_BYTES: usize = 1024 * 1024;
+
+//     if std::mem::size_of::<Element>() == 0 {
+//         0
+//     } else {
+//         std::cmp::min(
+//             hint.unwrap_or(0),
+//             MAX_PREALLOC_BYTES / std::mem::size_of::<Element>(),
+//         )
+//     }
+// }
+
+// pub struct SerdeSliceVisitor<'a, T: 'static, S>(pub &'a slice::ParaCord<T, S>);
+
+// impl<'de, T: 'static + Deserialize<'de> + Sync + Hash + Eq + Copy, S: BuildHasher> Visitor<'de>
+//     for SerdeSliceVisitor<'_, T, S>
+// {
+//     type Value = Key;
+
+//     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         formatter.write_str("a sequence")
+//     }
+
+//     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+//     where
+//         A: serde::de::SeqAccess<'de>,
+//     {
+//         let capacity = size_hint_cautious::<T>(seq.size_hint());
+//         let mut values = Vec::<T>::with_capacity(capacity);
+
+//         while let Some(value) = seq.next_element()? {
+//             values.push(value);
+//         }
+
+//         Ok(self.0.get_or_intern(&values))
+//     }
+// }
+
+#[doc(hidden)]
 #[macro_export]
 macro_rules! custom_key_serde {
     ($key:ident) => {
