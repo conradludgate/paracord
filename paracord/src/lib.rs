@@ -1,8 +1,11 @@
-//! [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interer](https://en.wikipedia.org/wiki/String_interning).
+//! [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interner](https://en.wikipedia.org/wiki/String_interning).
 //!
 //! When calling [`ParaCord::get_or_intern`], a [`Key`] is returned. This [`Key`] is guaranteed to be unique if the input string is unique,
 //! and is guaranteed to be the same if the input string is the same. [`Key`] is 32bits, and has a niche value which allows `Option<Key>` to
 //! also be 32bits.
+//!
+//! The 32bit key imposes a limitation that allocating 2^32 strings will panic. There's an additional self-imposed limitation that
+//! no string can be longer than 2^32 bytes long.
 //!
 //! If you don't want to intern the string, but check for it's existence, you can use [`ParaCord::get`], which returns `None` if not
 //! present.
@@ -45,31 +48,32 @@
 //! ```
 //! paracord::custom_key!(pub struct NameKey);
 //!
-//! let foo = NameKey::from_str_or_intern("foo");
-//! let bar = NameKey::from_str_or_intern("bar");
+//! let foo = NameKey::new("foo");
+//! let bar = NameKey::new("bar");
 //!
 //! assert_ne!(foo, bar);
 //!
 //! // returns the same key, no insert
-//! let foo2 = NameKey::from_str_or_intern("foo");
+//! let foo2 = NameKey::new("foo");
 //! assert_eq!(foo, foo2);
 //!
 //! // returns the same key, guaranteed no insert
-//! let foo3 = NameKey::try_from_str("foo").unwrap();
+//! let foo3 = NameKey::try_new_existing("foo").unwrap();
 //! assert_eq!(foo, foo3);
 //!
 //! // can be exchanged for the string
 //! assert_eq!(foo.as_str(), "foo");
 //! assert_eq!(bar.as_str(), "bar");
 //! ```
-
 #![warn(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
     clippy::multiple_unsafe_ops_per_block,
     clippy::undocumented_unsafe_blocks
 )]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
+use core::fmt;
 use std::{
     hash::{BuildHasher, Hash},
     num::NonZeroU32,
@@ -109,10 +113,10 @@ custom_key!(
     /// ```
     /// use paracord::DefaultKey;
     ///
-    /// let key = DefaultKey::from_str_or_intern("foo");
+    /// let key = DefaultKey::new("foo");
     /// assert_eq!(key.as_str(), "foo");
     ///
-    /// let key2 = DefaultKey::try_from_str("foo").unwrap();
+    /// let key2 = DefaultKey::try_new_existing("foo").unwrap();
     /// assert_eq!(key, key2);
     /// ```
     pub struct DefaultKey;
@@ -210,6 +214,12 @@ pub struct ParaCord<S = foldhash::fast::RandomState> {
     inner: slice::ParaCord<u8, S>,
 }
 
+impl<S> fmt::Debug for ParaCord<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
 impl Default for ParaCord {
     fn default() -> Self {
         Self::with_hasher(Default::default())
@@ -272,7 +282,9 @@ impl<S: BuildHasher> ParaCord<S> {
     pub fn get_or_intern(&self, s: &str) -> Key {
         self.inner.get_or_intern(s.as_bytes())
     }
+}
 
+impl<S> ParaCord<S> {
     /// Try and resolve the string associated with this [`Key`].
     ///
     /// This can only return `None` if given a key that was allocated from
@@ -315,15 +327,17 @@ impl<S: BuildHasher> ParaCord<S> {
     /// assert_eq!(paracord.resolve(foo), "foo");
     /// ```
     pub fn resolve(&self, key: Key) -> &str {
+        let b = self.inner.resolve(key);
+
         // Safety: we insert only strings, so it's valid utf8
-        unsafe { core::str::from_utf8_unchecked(self.inner.resolve(key)) }
+        unsafe { core::str::from_utf8_unchecked(b) }
     }
 
     /// Resolve the string associated with this [`Key`].
     ///
     /// # Safety
     /// This key must have been allocated in this paracord instance,
-    /// and [`ParaCord::reset`] must not have been called.
+    /// and [`ParaCord::clear`] must not have been called.
     ///
     /// # Examples
     ///
@@ -333,8 +347,8 @@ impl<S: BuildHasher> ParaCord<S> {
     ///
     /// let foo = paracord.get_or_intern("foo");
     /// // Safety: `foo` was allocated within paracord just above,
-    /// // and we never reset the paracord instance.
-    /// assert_eq!(unsafe { paracord.resolve(foo) }, "foo");
+    /// // and we never clear the paracord instance.
+    /// assert_eq!(unsafe { paracord.resolve_unchecked(foo) }, "foo");
     /// ```
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &str {
         // Safety: from caller.
@@ -392,10 +406,7 @@ impl<S: BuildHasher> ParaCord<S> {
     /// assert_eq!(entries, vec![(foo, "foo"), (bar, "bar")]);
     /// ```
     pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
-        self.inner
-            .iter()
-            // Safety: we insert only strings, so it's valid utf8
-            .map(|(key, s)| unsafe { (key, core::str::from_utf8_unchecked(s)) })
+        self.into_iter()
     }
 
     /// Deallocate all interned strings, but can retain some allocated memory
@@ -409,15 +420,16 @@ impl<S: BuildHasher> ParaCord<S> {
     /// let foo = paracord.get_or_intern("foo");
     /// assert_eq!(paracord.try_resolve(foo), Some("foo"));
     ///
-    /// paracord.reset();
+    /// paracord.clear();
     /// assert!(paracord.is_empty());
     ///
     /// assert_eq!(paracord.try_resolve(foo), None);
     /// ```
-    pub fn reset(&mut self) {
-        self.inner.reset();
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 
+    #[cfg(test)]
     /// Determine how much space has been used to allocate all the strings.
     ///
     /// # Examples
@@ -428,16 +440,45 @@ impl<S: BuildHasher> ParaCord<S> {
     ///
     /// let _mem = paracord.current_memory_usage();
     /// ```
-    pub fn current_memory_usage(&mut self) -> usize {
+    pub(crate) fn current_memory_usage(&mut self) -> usize {
         self.inner.current_memory_usage()
     }
 }
 
-impl<S: BuildHasher> Index<Key> for ParaCord<S> {
+impl<S> Index<Key> for ParaCord<S> {
     type Output = str;
 
     fn index(&self, index: Key) -> &Self::Output {
         self.resolve(index)
+    }
+}
+
+mod iter_private {
+    use crate::Key;
+
+    pub struct Iter<'a> {
+        pub(crate) inner: crate::slice::iter_private::Iter<'a, u8>,
+    }
+
+    impl<'a> Iterator for Iter<'a> {
+        type Item = (Key, &'a str);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let (key, s) = self.inner.next()?;
+            // Safety: we insert only strings, so it's valid utf8
+            Some(unsafe { (key, core::str::from_utf8_unchecked(s)) })
+        }
+    }
+}
+
+impl<'a, S> IntoIterator for &'a ParaCord<S> {
+    type Item = (Key, &'a str);
+    type IntoIter = iter_private::Iter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        iter_private::Iter {
+            inner: self.inner.into_iter(),
+        }
     }
 }
 
@@ -652,10 +693,10 @@ mod tests {
     }
 
     #[test]
-    fn reset() {
+    fn clear() {
         let mut rodeo = ParaCord::default();
         let k1 = rodeo.get_or_intern("A");
-        rodeo.reset();
+        rodeo.clear();
 
         assert!(rodeo.try_resolve(k1).is_none());
         assert!(rodeo.is_empty());
@@ -746,7 +787,7 @@ mod tests {
     #[test]
     #[cfg(feature = "serde")]
     fn serde() {
-        let key = DefaultKey::from_str_or_intern("hello");
+        let key = DefaultKey::new("hello");
 
         serde_test::assert_de_tokens(&key, &[serde_test::Token::Str("hello")]);
         serde_test::assert_ser_tokens(&key, &[serde_test::Token::Str("hello")]);

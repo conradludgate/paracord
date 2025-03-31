@@ -9,7 +9,7 @@ use typed_arena::Arena;
 
 use crate::{slice::ParaCord, Key};
 
-use super::{TableEntry, VecEntry};
+use super::TableEntry;
 
 pub(super) struct Alloc<T>(SyncWrapper<Arena<T>>);
 
@@ -20,8 +20,38 @@ impl<T> Default for Alloc<T> {
 }
 
 impl<T> Alloc<T> {
+    #[cfg(test)]
     pub(super) fn size(&mut self) -> usize {
         self.0.get_mut().len() * std::mem::size_of::<T>()
+    }
+}
+
+/// Represents a `&'_ [T]`, with a length limited to u32 and with an
+/// undescribed lifetime because it's technically self-ref.
+#[derive(Clone, Copy)]
+#[repr(packed)]
+pub(super) struct InternedPtr<T> {
+    ptr: *const T,
+    len: u32,
+}
+
+// Safety: `VecEntry` has the same safety requirements as `&[T]`
+unsafe impl<T: Sync> Sync for InternedPtr<T> {}
+// Safety: `VecEntry` has the same safety requirements as `&[T]`
+unsafe impl<T: Sync> Send for InternedPtr<T> {}
+
+impl<T> InternedPtr<T> {
+    fn new(s: &[T]) -> Self {
+        let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
+        Self {
+            len,
+            ptr: s.as_ptr(),
+        }
+    }
+
+    pub(super) fn slice(&self) -> &[T] {
+        // Safety: the ptr and len came from a &[T] to begin with.
+        unsafe { &*core::ptr::slice_from_raw_parts(self.ptr, self.len as usize) }
     }
 }
 
@@ -66,7 +96,7 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
                     let s = shard.alloc.alloc(s);
-                    let s = VecEntry::new(s);
+                    let s = InternedPtr::new(s);
                     entry.insert(TableEntry::new(s, key, hash));
                     s
                 });
@@ -88,7 +118,7 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
                     let s = shard.alloc.alloc(s);
-                    let s = VecEntry::new(s);
+                    let s = InternedPtr::new(s);
                     entry.insert(TableEntry::new(s, key, hash));
                     s
                 });

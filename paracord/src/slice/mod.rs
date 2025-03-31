@@ -23,13 +23,13 @@
 //! assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 //! ```
 
+use core::fmt;
 use std::{
     hash::{BuildHasher, Hash},
-    mem::size_of,
     ops::Index,
 };
 
-use alloc::Alloc;
+use alloc::{Alloc, InternedPtr};
 use clashmap::ClashCollection;
 use hashbrown::HashTable;
 
@@ -77,9 +77,15 @@ mod alloc;
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
-    keys_to_slice: boxcar::Vec<VecEntry<T>>,
+    keys_to_slice: boxcar::Vec<InternedPtr<T>>,
     slice_to_keys: ClashCollection<Collection<T>>,
     hasher: S,
+}
+
+impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
 }
 
 struct Collection<T> {
@@ -98,59 +104,21 @@ impl<T> Default for Collection<T> {
 
 struct TableEntry<T> {
     hash: u64,
+    ptr: InternedPtr<T>,
     key: Key,
-    len: u32,
-    ptr: *const T,
 }
 
-// Safety: `TableEntry` has the same safety requirements as `&[T]`
-unsafe impl<T: Sync> Sync for TableEntry<T> {}
-// Safety: `TableEntry` has the same safety requirements as `&[T]`
-unsafe impl<T: Sync> Send for TableEntry<T> {}
-
-#[derive(Clone, Copy)]
-struct VecEntry<T> {
-    len: u32,
-    ptr: *const T,
-}
-
-// Safety: `VecEntry` has the same safety requirements as `&[T]`
-unsafe impl<T: Sync> Sync for VecEntry<T> {}
-// Safety: `VecEntry` has the same safety requirements as `&[T]`
-unsafe impl<T: Sync> Send for VecEntry<T> {}
-
-impl<T: Eq> TableEntry<T> {
-    fn new(s: VecEntry<T>, key: Key, hash: u64) -> Self {
-        Self {
-            hash,
-            key,
-            len: s.len,
-            ptr: s.ptr,
-        }
+impl<T> TableEntry<T> {
+    fn new(ptr: InternedPtr<T>, key: Key, hash: u64) -> Self {
+        Self { hash, key, ptr }
     }
 
     fn slice(&self) -> &[T] {
-        // Safety: the ptr and len came from a &[T] to begin with.
-        unsafe { &*core::ptr::slice_from_raw_parts(self.ptr, self.len as usize) }
+        self.ptr.slice()
     }
 }
 
-impl<T: Eq> VecEntry<T> {
-    fn new(s: &[T]) -> Self {
-        let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
-        Self {
-            len,
-            ptr: s.as_ptr(),
-        }
-    }
-
-    fn slice(&self) -> &[T] {
-        // Safety: the ptr and len came from a &[T] to begin with.
-        unsafe { &*core::ptr::slice_from_raw_parts(self.ptr, self.len as usize) }
-    }
-}
-
-impl<T: Copy> Default for ParaCord<T> {
+impl<T> Default for ParaCord<T> {
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
@@ -179,7 +147,7 @@ impl<T, S: BuildHasher> ParaCord<T, S> {
     }
 }
 
-impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
+impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
     /// Try and get the [`Key`] associated with the given slice.
     /// Returns [`None`] if not found.
     ///
@@ -198,7 +166,9 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         let shard = self.slice_to_keys.get_read_shard(hash);
         shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
     }
+}
 
+impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Try and get the [`Key`] associated with the given slice.
     /// Allocates a new key if not found.
     ///
@@ -228,7 +198,9 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         };
         key
     }
+}
 
+impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// Try and resolve the slice associated with this [`Key`].
     ///
     /// This can only return `None` if given a key that was allocated from
@@ -253,12 +225,14 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     ///
     /// # Safety
     /// This key must have been allocated in this paracord instance,
-    /// and [`ParaCord::reset`] must not have been called.
+    /// and [`ParaCord::clear`] must not have been called.
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &[T] {
         // Safety: If the key was allocated in self, then key is inbounds.
         unsafe { self.keys_to_slice.get_unchecked(key.into_repr() as usize) }.slice()
     }
+}
 
+impl<T, S> ParaCord<T, S> {
     /// Determine how many slices have been allocated
     pub fn len(&self) -> usize {
         self.keys_to_slice.count()
@@ -272,14 +246,11 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// Get an iterator over every ([`Key`], `&[T]`) pair
     /// that has been allocated in this [`ParaCord`] instance.
     pub fn iter(&self) -> impl Iterator<Item = (Key, &[T])> {
-        self.keys_to_slice
-            .iter()
-            // SAFETY: we assume the key is correct given its existence in the set
-            .map(|(key, s)| unsafe { (Key::new_unchecked(key as u32), s.slice()) })
+        self.into_iter()
     }
 
     /// Deallocate all interned slices, but can retain some allocated memory
-    pub fn reset(&mut self) {
+    pub fn clear(&mut self) {
         self.keys_to_slice.clear();
         self.slice_to_keys.shards_mut().iter_mut().for_each(|s| {
             s.get_mut().table.clear();
@@ -287,9 +258,10 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         });
     }
 
+    #[cfg(test)]
     /// Determine how much space has been used to allocate all the slices.
-    pub fn current_memory_usage(&mut self) -> usize {
-        let keys_size = self.keys_to_slice.count() * size_of::<*const str>();
+    pub(crate) fn current_memory_usage(&mut self) -> usize {
+        let keys_size = self.keys_to_slice.count() * core::mem::size_of::<*const str>();
 
         let shards_size = {
             let acc = core::mem::size_of_val(self.slice_to_keys.shards());
@@ -362,11 +334,42 @@ impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
     }
 }
 
-impl<T: 'static + Sync + Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
+impl<T: Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
     type Output = [T];
 
     fn index(&self, index: Key) -> &Self::Output {
         self.resolve(index)
+    }
+}
+
+pub(crate) mod iter_private {
+    use crate::Key;
+
+    use super::InternedPtr;
+
+    pub struct Iter<'a, T> {
+        pub(super) inner: boxcar::Iter<'a, InternedPtr<T>>,
+    }
+
+    impl<'a, T> Iterator for Iter<'a, T> {
+        type Item = (Key, &'a [T]);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let (key, s) = self.inner.next()?;
+            // SAFETY: we assume the key is correct given its existence in the set
+            Some(unsafe { (Key::new_unchecked(key as u32), s.slice()) })
+        }
+    }
+}
+
+impl<'a, T, S> IntoIterator for &'a ParaCord<T, S> {
+    type Item = (Key, &'a [T]);
+    type IntoIter = iter_private::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        iter_private::Iter {
+            inner: self.keys_to_slice.iter(),
+        }
     }
 }
 

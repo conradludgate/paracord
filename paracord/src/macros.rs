@@ -10,10 +10,10 @@
 ///     pub struct MyKey;
 /// );
 ///
-/// let key = MyKey::from_str_or_intern("foo");
+/// let key = MyKey::new("foo");
 /// assert_eq!(key.as_str(), "foo");
 ///
-/// let key2 = MyKey::try_from_str("foo").unwrap();
+/// let key2 = MyKey::try_new_existing("foo").unwrap();
 /// assert_eq!(key, key2);
 /// ```
 ///
@@ -74,13 +74,13 @@ macro_rules! custom_key {
 
             /// Try and get the key associated with the given string.
             /// Returns [`None`] if not found.
-            pub fn try_from_str(s: &str) -> Option<Self> {
+            pub fn try_new_existing(s: &str) -> Option<Self> {
                 Self::paracord().get(s).map(Self)
             }
 
-            /// Try and get the key associated with the given string.
-            /// Allocates a new key if not found.
-            pub fn from_str_or_intern(s: &str) -> Self {
+            /// Create a new key associated with the given string.
+            /// Returns the same key if called repeatedly.
+            pub fn new(s: &str) -> Self {
                 Self(Self::paracord().get_or_intern(s))
             }
 
@@ -91,24 +91,20 @@ macro_rules! custom_key {
                 unsafe { Self::paracord().resolve_unchecked(self.0) }
             }
 
-            /// Determine how many strings have been allocated
-            pub fn len() -> usize {
+            /// Determine how many keys have been allocated
+            pub fn count() -> usize {
                 Self::paracord().len()
-            }
-
-            /// Determine if no strings have been allocated
-            pub fn is_empty() -> bool {
-                Self::paracord().is_empty()
             }
 
             /// Get an iterator over every
             #[doc = concat!("(`",stringify!($key),"`, `&str`)")]
-            /// pair that has been allocated in this [`ParaCord`] instance.
+            /// pair that has been allocated.
             pub fn iter() -> impl Iterator<Item = (Self, &'static str)> {
                 Self::paracord().iter().map(|(k, s)| (Self(k), s))
             }
         }
 
+        /// Displays the string that this key represents.
         impl ::core::fmt::Display for $key {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
                 f.write_str(self.as_str())
@@ -117,6 +113,13 @@ macro_rules! custom_key {
 
         impl ::core::convert::AsRef<str> for $key {
             fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl ::core::ops::Deref for $key {
+            type Target = str;
+            fn deref(&self) -> &str {
                 self.as_str()
             }
         }
@@ -131,14 +134,12 @@ mod tests {
     fn misc() {
         custom_key!(pub struct Foo);
 
-        assert!(Foo::is_empty());
-
-        let _foo = Foo::from_str_or_intern("foo");
-        let foo = Foo::try_from_str("foo").unwrap();
+        let _foo = Foo::new("foo");
+        let foo = Foo::try_new_existing("foo").unwrap();
 
         assert_eq!(foo.to_string(), "foo");
         assert_eq!(foo.as_ref(), "foo");
-        assert_eq!(Foo::len(), 1);
+        assert_eq!(Foo::count(), 1);
         let keys: Vec<_> = Foo::iter().collect();
         assert_eq!(keys, [(foo, "foo")]);
     }
