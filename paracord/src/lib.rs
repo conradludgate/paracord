@@ -425,7 +425,10 @@ impl<S> ParaCord<S> {
     ///
     /// assert_eq!(paracord.try_resolve(foo), None);
     /// ```
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self)
+    where
+        S: BuildHasher,
+    {
         self.inner.clear();
     }
 

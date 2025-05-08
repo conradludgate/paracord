@@ -20,6 +20,7 @@ clashmap = { version = "1.2", features = ["raw-api"] }
 typed-arena = "2"
 hashbrown = { version = "0.15", default-features = false }
 sync_wrapper = "1"
+papaya = "0.2"
 
 serde = { version = "1", optional = true }
 

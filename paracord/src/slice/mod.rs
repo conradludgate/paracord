@@ -27,6 +27,7 @@ use core::fmt;
 use std::{
     hash::{BuildHasher, Hash},
     ops::Index,
+    sync::Mutex,
 };
 
 use alloc::{Alloc, InternedPtr};
@@ -78,8 +79,8 @@ mod alloc;
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
     keys_to_slice: boxcar::Vec<InternedPtr<T>>,
-    slice_to_keys: ClashCollection<Collection<T>>,
-    hasher: S,
+    slice_to_keys: papaya::HashMap<InternedPtr<T>, Key, S>,
+    alloc: Mutex<Alloc<T>>,
 }
 
 impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
@@ -89,14 +90,12 @@ impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
 }
 
 struct Collection<T> {
-    table: HashTable<TableEntry<T>>,
     alloc: Alloc<T>,
 }
 
 impl<T> Default for Collection<T> {
     fn default() -> Self {
         Self {
-            table: Default::default(),
             alloc: Default::default(),
         }
     }
@@ -141,8 +140,8 @@ impl<T, S: BuildHasher> ParaCord<T, S> {
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             keys_to_slice: boxcar::Vec::default(),
-            slice_to_keys: ClashCollection::default(),
-            hasher,
+            slice_to_keys: papaya::HashMap::with_hasher(hasher),
+            alloc: Mutex::new(Alloc::default()),
         }
     }
 }
@@ -162,9 +161,10 @@ impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
     /// assert_eq!(paracord.get(&[5,6,7,8]), None);
     /// ```
     pub fn get(&self, s: &[T]) -> Option<Key> {
-        let hash = self.hasher.hash_one(s);
-        let shard = self.slice_to_keys.get_read_shard(hash);
-        shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
+        // let hash = self.hasher.hash_one(s);
+        // let shard = self.slice_to_keys.get_read_shard(hash);
+        // shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
+        self.slice_to_keys.pin().get(s).copied()
     }
 }
 
@@ -186,15 +186,8 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// assert_eq!(foo, foo2);
     /// ```
     pub fn get_or_intern(&self, s: &[T]) -> Key {
-        let hash = self.hasher.hash_one(s);
-
-        let key = {
-            let shard = self.slice_to_keys.get_read_shard(hash);
-            shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
-        };
-
-        let Some(key) = key else {
-            return self.intern_slow(s, hash);
+        let Some(key) = self.get(s) else {
+            return self.intern_slow(s);
         };
         key
     }
@@ -250,31 +243,35 @@ impl<T, S> ParaCord<T, S> {
     }
 
     /// Deallocate all interned slices, but can retain some allocated memory
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self)
+    where
+        T: Hash + Eq,
+        S: BuildHasher,
+    {
+        let mut alloc = self.alloc.lock().unwrap();
         self.keys_to_slice.clear();
-        self.slice_to_keys.shards_mut().iter_mut().for_each(|s| {
-            s.get_mut().table.clear();
-            drop(core::mem::take(&mut s.get_mut().alloc))
-        });
+        self.slice_to_keys.pin().clear();
+        drop(core::mem::take(&mut *alloc))
     }
 
     #[cfg(test)]
     /// Determine how much space has been used to allocate all the slices.
     pub(crate) fn current_memory_usage(&mut self) -> usize {
-        let keys_size = self.keys_to_slice.count() * core::mem::size_of::<*const str>();
+        // let keys_size = self.keys_to_slice.count() * core::mem::size_of::<*const str>();
 
-        let shards_size = {
-            let acc = core::mem::size_of_val(self.slice_to_keys.shards());
-            self.slice_to_keys
-                .shards_mut()
-                .iter_mut()
-                .fold(acc, |acc, shard| {
-                    let shard = shard.get_mut();
-                    acc + shard.table.allocation_size() + shard.alloc.size()
-                })
-        };
+        // let shards_size = {
+        //     let acc = core::mem::size_of_val(self.slice_to_keys.shards());
+        //     self.slice_to_keys
+        //         .shards_mut()
+        //         .iter_mut()
+        //         .fold(acc, |acc, shard| {
+        //             let shard = shard.get_mut();
+        //             acc + shard.table.allocation_size() + shard.alloc.size()
+        //         })
+        // };
 
-        size_of::<Self>() + keys_size + shards_size
+        // size_of::<Self>() + keys_size + shards_size
+        0
     }
 }
 
@@ -287,8 +284,8 @@ impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<
 
         let mut this = Self {
             keys_to_slice: boxcar::Vec::with_capacity(len),
-            slice_to_keys: ClashCollection::default(),
-            hasher: S::default(),
+            slice_to_keys: papaya::HashMap::with_capacity_and_hasher(len, S::default()),
+            alloc: Mutex::new(Alloc::default()),
         };
         this.extend(iter);
         this
@@ -300,8 +297,7 @@ impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I> for ParaCord<
         // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
         for s in iter {
             let s = s.as_ref();
-            let hash = self.hasher.hash_one(s);
-            self.intern_slow_mut(s, hash);
+            self.intern_slow_mut(s);
         }
     }
 }
@@ -314,8 +310,8 @@ impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for crate::ParaCor
         let mut this = Self {
             inner: ParaCord {
                 keys_to_slice: boxcar::Vec::with_capacity(len),
-                slice_to_keys: ClashCollection::default(),
-                hasher: S::default(),
+                slice_to_keys: papaya::HashMap::with_capacity_and_hasher(len, S::default()),
+                alloc: Mutex::new(Alloc::default()),
             },
         };
         this.extend(iter);
@@ -328,8 +324,7 @@ impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
         // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
         for s in iter {
             let s = s.as_ref().as_bytes();
-            let hash = self.inner.hasher.hash_one(s);
-            self.inner.intern_slow_mut(s, hash);
+            self.inner.intern_slow_mut(s);
         }
     }
 }

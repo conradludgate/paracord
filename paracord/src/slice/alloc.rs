@@ -4,6 +4,7 @@ use std::{
 };
 
 use hashbrown::hash_table::Entry;
+use papaya::Equivalent;
 use sync_wrapper::SyncWrapper;
 use typed_arena::Arena;
 
@@ -55,6 +56,26 @@ impl<T> InternedPtr<T> {
     }
 }
 
+impl<T: Hash> Hash for InternedPtr<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.slice().hash(state);
+    }
+}
+
+impl<T: Eq> Equivalent<InternedPtr<T>> for [T] {
+    fn equivalent(&self, key: &InternedPtr<T>) -> bool {
+        self == key.slice()
+    }
+}
+
+impl<T: PartialEq> PartialEq for InternedPtr<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.slice() == other.slice()
+    }
+}
+
+impl<T: Eq> Eq for InternedPtr<T> {}
+
 impl<T: Copy> Alloc<T> {
     #[inline]
     fn alloc(&mut self, s: &[T]) -> &mut [T] {
@@ -86,46 +107,48 @@ impl<T: Copy> Alloc<T> {
 
 impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     #[cold]
-    pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
+    pub(super) fn intern_slow(&self, s: &[T]) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let shard = &mut *self.slice_to_keys.get_write_shard(hash);
-        match shard.table.entry(hash, |k| s == k.slice(), |k| k.hash) {
-            Entry::Occupied(entry) => entry.get().key,
-            Entry::Vacant(entry) => {
-                let key = self.keys_to_slice.push_with(|key| {
-                    let key = Key::from_index(key);
-                    let s = shard.alloc.alloc(s);
-                    let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key, hash));
-                    s
-                });
+        let mut alloc = self.alloc.lock().unwrap();
 
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key as u32) }
-            }
+        let pin = self.slice_to_keys.pin();
+        if let Some(key) = pin.get(s) {
+            return *key;
         }
+
+        let key = self.keys_to_slice.push_with(|key| {
+            let key = Key::from_index(key);
+            let s = alloc.alloc(s);
+            let s = InternedPtr::new(s);
+            pin.insert(s, key);
+            s
+        });
+
+        // SAFETY: as asserted the key is correct
+        unsafe { Key::new_unchecked(key as u32) }
     }
 
     #[cold]
-    pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
+    pub(super) fn intern_slow_mut(&mut self, s: &[T]) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let shard = &mut *self.slice_to_keys.get_mut(hash);
-        match shard.table.entry(hash, |k| s == k.slice(), |k| k.hash) {
-            Entry::Occupied(entry) => entry.get().key,
-            Entry::Vacant(entry) => {
-                let key = self.keys_to_slice.push_with(|key| {
-                    let key = Key::from_index(key);
-                    let s = shard.alloc.alloc(s);
-                    let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key, hash));
-                    s
-                });
+        let alloc = self.alloc.get_mut().unwrap();
 
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key as u32) }
-            }
+        let pin = self.slice_to_keys.pin();
+        if let Some(key) = pin.get(s) {
+            return *key;
         }
+
+        let key = self.keys_to_slice.push_with(|key| {
+            let key = Key::from_index(key);
+            let s = alloc.alloc(s);
+            let s = InternedPtr::new(s);
+            pin.insert(s, key);
+            s
+        });
+
+        // SAFETY: as asserted the key is correct
+        unsafe { Key::new_unchecked(key as u32) }
     }
 }
