@@ -87,15 +87,17 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let shard = &mut *self.slice_to_keys.get_write_shard(hash);
-        match shard.table.entry(hash, |k| s == k.slice(), |k| k.hash) {
+        let h = &self.hasher;
+        let Collection { table, alloc } = &mut *self.slice_to_keys.get_write_shard(hash);
+
+        match table.entry(hash, |k| s == k.slice(), |k| h.hash_one(k.slice())) {
             Entry::Occupied(entry) => entry.get().key,
             Entry::Vacant(entry) => {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
-                    let s = shard.alloc.alloc(s);
+                    let s = alloc.alloc(s);
                     let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key, hash));
+                    entry.insert(TableEntry::new(s, key));
                     s
                 });
 
@@ -109,15 +111,17 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let shard = &mut *self.slice_to_keys.get_mut(hash);
-        match shard.table.entry(hash, |k| s == k.slice(), |k| k.hash) {
+        let h = &self.hasher;
+        let Collection { table, alloc } = &mut *self.slice_to_keys.get_mut(hash);
+
+        match table.entry(hash, |k| s == k.slice(), |k| h.hash_one(k.slice())) {
             Entry::Occupied(entry) => entry.get().key,
             Entry::Vacant(entry) => {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
-                    let s = shard.alloc.alloc(s);
+                    let s = alloc.alloc(s);
                     let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key, hash));
+                    entry.insert(TableEntry::new(s, key));
                     s
                 });
 

@@ -101,14 +101,13 @@ impl<T> Default for Collection<T> {
 }
 
 struct TableEntry<T> {
-    hash: u64,
     ptr: InternedPtr<T>,
     key: Key,
 }
 
 impl<T> TableEntry<T> {
-    fn new(ptr: InternedPtr<T>, key: Key, hash: u64) -> Self {
-        Self { hash, key, ptr }
+    fn new(ptr: InternedPtr<T>, key: Key) -> Self {
+        Self { key, ptr }
     }
 
     fn slice(&self) -> &[T] {
