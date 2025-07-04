@@ -124,9 +124,15 @@ custom_key!(
 ///
 /// [`Key`] implements [`core::cmp::Ord`] for use within collections like [`BTreeMap`](std::collections::BTreeMap),
 /// but the order is not defined to be meaningful or relied upon. Treat [`Key`]s as opaque blobs, with an unstable representation.
-#[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy)]
 #[repr(transparent)]
 pub struct Key(NonZeroU32);
+
+impl std::fmt::Debug for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Key").field(&self.into_repr()).finish()
+    }
+}
 
 impl Key {
     /// Turn the key into a u32.
@@ -550,7 +556,7 @@ mod tests {
             for _ in 0..THREADS {
                 s.spawn(|| {
                     barrier.wait();
-                    
+
                     let a = paracord.get_or_intern("A");
                     assert_eq!(a, paracord.get_or_intern("A"));
 
@@ -811,6 +817,6 @@ mod tests {
 
         // average 86 bytes per string.
         // average string length is 24, so 62 bytes overhead.
-        assert_eq!(mem / len, 86);
+        assert_eq!(mem / len, 50);
     }
 }

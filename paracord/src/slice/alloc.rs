@@ -1,12 +1,12 @@
 use std::hash::{BuildHasher, Hash};
 use std::mem::MaybeUninit;
 
-use hashbrown::hash_table::Entry;
+use papaya::table::{HashTable, InsertResult, VerifiedGuard};
 use sync_wrapper::SyncWrapper;
 use typed_arena::Arena;
 
 use super::TableEntry;
-use crate::slice::{Collection, ParaCord};
+use crate::slice::{find, NoDealloc, ParaCord};
 use crate::Key;
 
 pub(super) struct Alloc<T>(SyncWrapper<Arena<T>>);
@@ -85,50 +85,76 @@ impl<T: Copy> Alloc<T> {
 
 impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     #[cold]
-    pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
+    pub(super) fn intern_slow(&self, s: &[T], hash: u64, guard: &impl VerifiedGuard) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let h = &self.hasher;
-        let Collection { table, alloc } = &mut *self.slice_to_keys.get_write_shard(hash);
+        let alloc = &mut *self.alloc.get_write_shard(hash);
 
-        match table.entry(hash, |k| s == k.slice(), |k| h.hash_one(k.slice())) {
-            Entry::Occupied(entry) => entry.get().key,
-            Entry::Vacant(entry) => {
-                let key = self.keys_to_slice.push_with(|key| {
-                    let key = Key::from_index(key);
-                    let s = alloc.alloc(s);
-                    let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key));
-                    s
-                });
-
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key as u32) }
-            }
-        }
+        intern_inner_locked(
+            &self.slice_to_keys,
+            &self.keys_to_slice,
+            alloc,
+            &self.hasher,
+            s,
+            hash,
+            guard,
+        )
     }
 
     #[cold]
     pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let h = &self.hasher;
-        let Collection { table, alloc } = &mut *self.slice_to_keys.get_mut(hash);
+        let alloc = &mut *self.alloc.get_mut(hash);
+        let guard = self.slice_to_keys.guard();
 
-        match table.entry(hash, |k| s == k.slice(), |k| h.hash_one(k.slice())) {
-            Entry::Occupied(entry) => entry.get().key,
-            Entry::Vacant(entry) => {
-                let key = self.keys_to_slice.push_with(|key| {
-                    let key = Key::from_index(key);
-                    let s = alloc.alloc(s);
-                    let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key));
-                    s
-                });
+        intern_inner_locked(
+            &self.slice_to_keys,
+            &self.keys_to_slice,
+            alloc,
+            &self.hasher,
+            s,
+            hash,
+            &guard,
+        )
+    }
+}
 
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key as u32) }
-            }
-        }
+fn intern_inner_locked<T: Hash + Eq + Copy, S: BuildHasher>(
+    slice_to_keys: &HashTable<TableEntry<T>, NoDealloc>,
+    keys_to_slice: &boxcar::Vec<TableEntry<T>>,
+    alloc: &mut Alloc<T>,
+    h: &S,
+    s: &[T],
+    hash: u64,
+    guard: &impl VerifiedGuard,
+) -> Key {
+    if let Some(key) = find(slice_to_keys, s, hash, guard) {
+        return key;
+    }
+
+    let key = keys_to_slice.push_with(|key| {
+        let key = Key::from_index(key);
+        let s = alloc.alloc(s);
+        let s = InternedPtr::new(s);
+        TableEntry::new(s, key)
+    });
+    // safety: we have just inserted this entry
+    let entry = unsafe { keys_to_slice.get_unchecked(key) };
+
+    // safety: k is allocated correct
+    let eq = |k: *mut TableEntry<T>| unsafe { s == (*k).slice() };
+    // safety: k is allocated correct
+    let hasher = |k: *mut TableEntry<T>| unsafe { h.hash_one((*k).slice()) };
+
+    let k = entry as *const TableEntry<T> as *mut TableEntry<T>;
+    let res = slice_to_keys.insert(hash, k, eq, hasher, false, guard);
+
+    match res {
+        InsertResult::Inserted => Key::from_index(key),
+        InsertResult::Replaced(_) => unreachable!("we do not replace"),
+        InsertResult::Error(_) => unreachable!(
+            "while holding the lock, we checked for this entry already and it was not in there"
+        ),
     }
 }
