@@ -29,7 +29,8 @@ use std::hash::{BuildHasher, Hash};
 use std::ops::Index;
 
 use clashmap::ClashCollection;
-use hashbrown::HashTable;
+use papaya::table::{HashTable, VerifiedGuard};
+use seize::Collector;
 
 use crate::Key;
 
@@ -75,8 +76,9 @@ mod alloc;
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
+    slice_to_keys: HashTable<InternedPtr<T>, NoDealloc>,
+    alloc: ClashCollection<Alloc<T>>,
     keys_to_slice: boxcar::Vec<InternedPtr<T>>,
-    slice_to_keys: ClashCollection<Collection<T>>,
     hasher: S,
 }
 
@@ -86,33 +88,9 @@ impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
     }
 }
 
-struct Collection<T> {
-    table: HashTable<TableEntry<T>>,
-    alloc: Alloc<T>,
-}
-
-impl<T> Default for Collection<T> {
-    fn default() -> Self {
-        Self {
-            table: HashTable::default(),
-            alloc: Alloc::default(),
-        }
-    }
-}
-
-struct TableEntry<T> {
-    ptr: InternedPtr<T>,
-    key: Key,
-}
-
-impl<T> TableEntry<T> {
-    fn new(ptr: InternedPtr<T>, key: Key) -> Self {
-        Self { ptr, key }
-    }
-
-    fn slice(&self) -> &[T] {
-        self.ptr.slice()
-    }
+struct NoDealloc;
+impl<T> papaya::table::Dealloc<T> for NoDealloc {
+    unsafe fn dealloc(_: *mut T) {}
 }
 
 impl<T> Default for ParaCord<T> {
@@ -138,7 +116,8 @@ impl<T, S: BuildHasher> ParaCord<T, S> {
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             keys_to_slice: boxcar::Vec::default(),
-            slice_to_keys: ClashCollection::default(),
+            slice_to_keys: HashTable::new(0, Collector::new(), papaya::ResizeMode::Incremental(64)),
+            alloc: ClashCollection::default(),
             hasher,
         }
     }
@@ -160,9 +139,23 @@ impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
     /// ```
     pub fn get(&self, s: &[T]) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
-        let shard = self.slice_to_keys.get_read_shard(hash);
-        shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
+        let guard = self.slice_to_keys.guard();
+        find(&self.slice_to_keys, s, hash, &guard)
     }
+}
+
+fn find<T: Hash + Eq>(
+    slice_to_keys: &HashTable<InternedPtr<T>, NoDealloc>,
+    s: &[T],
+    hash: u64,
+    guard: &impl VerifiedGuard,
+) -> Option<Key> {
+    // safety: k is allocated correct
+    let eq = |k: *mut InternedPtr<T>| unsafe { s == (*k).slice() };
+    // safety: k is allocated correct
+    let map = |k: *mut InternedPtr<T>| unsafe { (*k).key };
+
+    slice_to_keys.find(hash, eq, guard).map(map)
 }
 
 impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
@@ -184,14 +177,10 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// ```
     pub fn get_or_intern(&self, s: &[T]) -> Key {
         let hash = self.hasher.hash_one(s);
+        let guard = self.slice_to_keys.guard();
 
-        let key = {
-            let shard = self.slice_to_keys.get_read_shard(hash);
-            shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
-        };
-
-        let Some(key) = key else {
-            return self.intern_slow(s, hash);
+        let Some(key) = find(&self.slice_to_keys, s, hash, &guard) else {
+            return self.intern_slow(s, hash, &guard);
         };
         key
     }
@@ -248,30 +237,34 @@ impl<T, S> ParaCord<T, S> {
 
     /// Deallocate all interned slices, but can retain some allocated memory
     pub fn clear(&mut self) {
+        self.slice_to_keys =
+            HashTable::new(0, Collector::new(), papaya::ResizeMode::Incremental(64));
         self.keys_to_slice.clear();
-        self.slice_to_keys.shards_mut().iter_mut().for_each(|s| {
-            s.get_mut().table.clear();
-            drop(core::mem::take(&mut s.get_mut().alloc));
+        self.alloc.shards_mut().iter_mut().for_each(|s| {
+            drop(core::mem::take(s.get_mut()));
         });
     }
 
     #[cfg(test)]
     /// Determine how much space has been used to allocate all the slices.
     pub(crate) fn current_memory_usage(&mut self) -> usize {
-        let keys_size = self.keys_to_slice.count() * core::mem::size_of::<*const str>();
-
         let shards_size = {
-            let acc = core::mem::size_of_val(self.slice_to_keys.shards());
-            self.slice_to_keys
-                .shards_mut()
-                .iter_mut()
-                .fold(acc, |acc, shard| {
-                    let shard = shard.get_mut();
-                    acc + shard.table.allocation_size() + shard.alloc.size()
-                })
+            let acc = core::mem::size_of_val(self.alloc.shards());
+            self.alloc.shards_mut().iter_mut().fold(acc, |acc, shard| {
+                let shard = shard.get_mut();
+                acc + shard.size()
+            })
         };
 
-        size_of::<Self>() + keys_size + shards_size
+        // no way to get capacity, so let's just round up.
+        let keys_size =
+            self.keys_to_slice.count().next_power_of_two() * core::mem::size_of::<InternedPtr<T>>();
+
+        // no way to get capacity, so let's just round up.
+        let map_size =
+            self.slice_to_keys.len().next_power_of_two() * (1 + size_of::<*const InternedPtr<T>>());
+
+        size_of::<Self>() + keys_size + shards_size + map_size
     }
 }
 
@@ -284,7 +277,12 @@ impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<
 
         let mut this = Self {
             keys_to_slice: boxcar::Vec::with_capacity(len),
-            slice_to_keys: ClashCollection::default(),
+            alloc: ClashCollection::default(),
+            slice_to_keys: HashTable::new(
+                len,
+                Collector::new(),
+                papaya::ResizeMode::Incremental(64),
+            ),
             hasher: S::default(),
         };
         this.extend(iter);
@@ -311,7 +309,12 @@ impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for crate::ParaCor
         let mut this = Self {
             inner: ParaCord {
                 keys_to_slice: boxcar::Vec::with_capacity(len),
-                slice_to_keys: ClashCollection::default(),
+                slice_to_keys: HashTable::new(
+                    len,
+                    Collector::new(),
+                    papaya::ResizeMode::Incremental(64),
+                ),
+                alloc: ClashCollection::default(),
                 hasher: S::default(),
             },
         };
