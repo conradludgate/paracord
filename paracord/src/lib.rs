@@ -519,161 +519,155 @@ mod tests {
 
     #[test]
     fn with_hasher() {
-        let rodeo: ParaCord<RandomState> = ParaCord::with_hasher(RandomState::new());
+        let paracord: ParaCord<RandomState> = ParaCord::with_hasher(RandomState::new());
 
-        let key = rodeo.get_or_intern("Test");
-        assert_eq!("Test", rodeo.resolve(key));
+        let key = paracord.get_or_intern("Test");
+        assert_eq!("Test", paracord.resolve(key));
     }
 
     #[test]
     fn get_or_intern() {
-        let rodeo = ParaCord::default();
+        let paracord = ParaCord::default();
 
-        let a = rodeo.get_or_intern("A");
-        assert_eq!(a, rodeo.get_or_intern("A"));
+        let a = paracord.get_or_intern("A");
+        assert_eq!(a, paracord.get_or_intern("A"));
 
-        let b = rodeo.get_or_intern("B");
-        assert_eq!(b, rodeo.get_or_intern("B"));
+        let b = paracord.get_or_intern("B");
+        assert_eq!(b, paracord.get_or_intern("B"));
 
-        let c = rodeo.get_or_intern("C");
-        assert_eq!(c, rodeo.get_or_intern("C"));
+        let c = paracord.get_or_intern("C");
+        assert_eq!(c, paracord.get_or_intern("C"));
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn get_or_intern_threaded() {
-        let rodeo = Arc::new(ParaCord::default());
+        const THREADS: usize = 10;
 
-        let moved = Arc::clone(&rodeo);
-        thread::spawn(move || {
-            let a = moved.get_or_intern("A");
-            assert_eq!(a, moved.get_or_intern("A"));
+        let barrier = Barrier::new(THREADS);
+        let paracord = ParaCord::default();
 
-            let b = moved.get_or_intern("B");
-            assert_eq!(b, moved.get_or_intern("B"));
+        std::thread::scope(|s| {
+            for _ in 0..THREADS {
+                s.spawn(|| {
+                    barrier.wait();
+                    
+                    let a = paracord.get_or_intern("A");
+                    assert_eq!(a, paracord.get_or_intern("A"));
 
-            let c = moved.get_or_intern("C");
-            assert_eq!(c, moved.get_or_intern("C"));
+                    let b = paracord.get_or_intern("B");
+                    assert_eq!(b, paracord.get_or_intern("B"));
+
+                    let c = paracord.get_or_intern("C");
+                    assert_eq!(c, paracord.get_or_intern("C"));
+                });
+            }
         });
-
-        let a = rodeo.get_or_intern("A");
-        assert_eq!(a, rodeo.get_or_intern("A"));
-
-        let b = rodeo.get_or_intern("B");
-        assert_eq!(b, rodeo.get_or_intern("B"));
-
-        let c = rodeo.get_or_intern("C");
-        assert_eq!(c, rodeo.get_or_intern("C"));
     }
 
     #[test]
     fn get() {
-        let rodeo = ParaCord::default();
-        let key = rodeo.get_or_intern("A");
+        let paracord = ParaCord::default();
+        let key = paracord.get_or_intern("A");
 
-        assert_eq!(Some(key), rodeo.get("A"));
+        assert_eq!(Some(key), paracord.get("A"));
     }
 
     #[test]
-    #[cfg(not(miri))]
-    fn get_threaded() {
-        let rodeo = Arc::new(ParaCord::default());
-        let key = rodeo.get_or_intern("A");
 
-        let moved = Arc::clone(&rodeo);
+    fn get_threaded() {
+        let paracord = Arc::new(ParaCord::default());
+        let key = paracord.get_or_intern("A");
+
+        let moved = Arc::clone(&paracord);
         thread::spawn(move || {
             assert_eq!(Some(key), moved.get("A"));
         });
 
-        assert_eq!(Some(key), rodeo.get("A"));
+        assert_eq!(Some(key), paracord.get("A"));
     }
 
     #[test]
     fn resolve() {
-        let rodeo = ParaCord::default();
-        let key = rodeo.get_or_intern("A");
+        let paracord = ParaCord::default();
+        let key = paracord.get_or_intern("A");
 
-        assert_eq!("A", rodeo.resolve(key));
+        assert_eq!("A", paracord.resolve(key));
     }
 
     #[test]
     #[should_panic]
-    #[cfg(not(miri))]
     fn resolve_panics() {
-        let rodeo = ParaCord::default();
-        rodeo.resolve(Key::try_from_repr(100).unwrap());
+        let paracord = ParaCord::default();
+        paracord.resolve(Key::try_from_repr(100).unwrap());
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn resolve_threaded() {
-        let rodeo = Arc::new(ParaCord::default());
-        let key = rodeo.get_or_intern("A");
+        let paracord = Arc::new(ParaCord::default());
+        let key = paracord.get_or_intern("A");
 
-        let moved = Arc::clone(&rodeo);
+        let moved = Arc::clone(&paracord);
         thread::spawn(move || {
             assert_eq!("A", moved.resolve(key));
         });
 
-        assert_eq!("A", rodeo.resolve(key));
+        assert_eq!("A", paracord.resolve(key));
     }
 
     #[test]
-    #[cfg(not(any(miri)))]
     fn resolve_panics_threaded() {
-        let rodeo = Arc::new(ParaCord::default());
-        let key = rodeo.get_or_intern("A");
+        let paracord = Arc::new(ParaCord::default());
+        let key = paracord.get_or_intern("A");
 
-        let moved = Arc::clone(&rodeo);
+        let moved = Arc::clone(&paracord);
         let handle = thread::spawn(move || {
             assert_eq!("A", moved.resolve(key));
             moved.resolve(Key::try_from_repr(100).unwrap());
         });
 
-        assert_eq!("A", rodeo.resolve(key));
+        assert_eq!("A", paracord.resolve(key));
         assert!(handle.join().is_err());
     }
 
     #[test]
     fn try_resolve() {
-        let rodeo = ParaCord::default();
-        let key = rodeo.get_or_intern("A");
+        let paracord = ParaCord::default();
+        let key = paracord.get_or_intern("A");
 
-        assert_eq!(Some("A"), rodeo.try_resolve(key));
-        assert_eq!(None, rodeo.try_resolve(Key::try_from_repr(100).unwrap()));
+        assert_eq!(Some("A"), paracord.try_resolve(key));
+        assert_eq!(None, paracord.try_resolve(Key::try_from_repr(100).unwrap()));
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn try_resolve_threaded() {
-        let rodeo = Arc::new(ParaCord::default());
-        let key = rodeo.get_or_intern("A");
+        let paracord = Arc::new(ParaCord::default());
+        let key = paracord.get_or_intern("A");
 
-        let moved = Arc::clone(&rodeo);
+        let moved = Arc::clone(&paracord);
         thread::spawn(move || {
             assert_eq!(Some("A"), moved.try_resolve(key));
             assert_eq!(None, moved.try_resolve(Key::try_from_repr(100).unwrap()));
         });
 
-        assert_eq!(Some("A"), rodeo.try_resolve(key));
-        assert_eq!(None, rodeo.try_resolve(Key::try_from_repr(100).unwrap()));
+        assert_eq!(Some("A"), paracord.try_resolve(key));
+        assert_eq!(None, paracord.try_resolve(Key::try_from_repr(100).unwrap()));
     }
 
     #[test]
     fn len() {
-        let rodeo = ParaCord::default();
-        rodeo.get_or_intern("A");
-        rodeo.get_or_intern("B");
-        rodeo.get_or_intern("C");
+        let paracord = ParaCord::default();
+        paracord.get_or_intern("A");
+        paracord.get_or_intern("B");
+        paracord.get_or_intern("C");
 
-        assert_eq!(rodeo.len(), 3);
+        assert_eq!(paracord.len(), 3);
     }
 
     #[test]
     fn empty() {
-        let rodeo = ParaCord::default();
+        let paracord = ParaCord::default();
 
-        assert!(rodeo.is_empty());
+        assert!(paracord.is_empty());
     }
 
     #[test]
@@ -682,11 +676,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(miri))]
     fn drop_threaded() {
-        let rodeo = Arc::new(ParaCord::default());
+        let paracord = Arc::new(ParaCord::default());
 
-        let moved = Arc::clone(&rodeo);
+        let moved = Arc::clone(&paracord);
         thread::spawn(move || {
             let _ = moved;
         });
@@ -694,38 +687,31 @@ mod tests {
 
     #[test]
     fn memory() {
-        let mut rodeo = ParaCord::default();
-        rodeo.get_or_intern("A");
-        rodeo.get_or_intern("B");
-        rodeo.get_or_intern("C");
+        let mut paracord = ParaCord::default();
+        paracord.get_or_intern("A");
+        paracord.get_or_intern("B");
+        paracord.get_or_intern("C");
 
-        assert!(rodeo.current_memory_usage() > 0);
+        assert!(paracord.current_memory_usage() > 0);
     }
 
     #[test]
     fn clear() {
-        let mut rodeo = ParaCord::default();
-        let k1 = rodeo.get_or_intern("A");
-        rodeo.clear();
+        let mut paracord = ParaCord::default();
+        let k1 = paracord.get_or_intern("A");
+        paracord.clear();
 
-        assert!(rodeo.try_resolve(k1).is_none());
-        assert!(rodeo.is_empty());
+        assert!(paracord.try_resolve(k1).is_none());
+        assert!(paracord.is_empty());
     }
-
-    // #[test]
-    // #[cfg(not(miri))]
-    // fn debug() {
-    //     let rodeo = ParaCord::default();
-    //     println!("{:?}", rodeo);
-    // }
 
     #[test]
     fn iter() {
-        let rodeo = ParaCord::default();
-        rodeo.get_or_intern("A");
-        rodeo.get_or_intern("B");
-        rodeo.get_or_intern("C");
-        let values: Vec<_> = rodeo.iter().map(|(k, v)| (k.into_repr(), v)).collect();
+        let paracord = ParaCord::default();
+        paracord.get_or_intern("A");
+        paracord.get_or_intern("B");
+        paracord.get_or_intern("C");
+        let values: Vec<_> = paracord.iter().map(|(k, v)| (k.into_repr(), v)).collect();
         assert_eq!(values.len(), 3);
         assert!(values.contains(&(0, "A")));
         assert!(values.contains(&(1, "B")));
@@ -734,64 +720,57 @@ mod tests {
 
     #[test]
     fn from_iter() {
-        let rodeo: ParaCord = ["a", "b", "c", "d", "e"].iter().collect();
+        let paracord: ParaCord = ["a", "b", "c", "d", "e"].iter().collect();
 
-        assert!(rodeo.get("a").is_some());
-        assert!(rodeo.get("b").is_some());
-        assert!(rodeo.get("c").is_some());
-        assert!(rodeo.get("d").is_some());
-        assert!(rodeo.get("e").is_some());
+        assert!(paracord.get("a").is_some());
+        assert!(paracord.get("b").is_some());
+        assert!(paracord.get("c").is_some());
+        assert!(paracord.get("d").is_some());
+        assert!(paracord.get("e").is_some());
     }
 
     #[test]
     fn index() {
-        let rodeo = ParaCord::default();
-        let key = rodeo.get_or_intern("A");
+        let paracord = ParaCord::default();
+        let key = paracord.get_or_intern("A");
 
-        assert_eq!("A", &rodeo[key]);
+        assert_eq!("A", &paracord[key]);
     }
 
     #[test]
     fn extend() {
-        let mut rodeo = ParaCord::default();
-        assert!(rodeo.is_empty());
+        let mut paracord = ParaCord::default();
+        assert!(paracord.is_empty());
 
-        rodeo.extend(["a", "b", "c", "d", "e"].iter());
-        assert!(rodeo.get("a").is_some());
-        assert!(rodeo.get("b").is_some());
-        assert!(rodeo.get("c").is_some());
-        assert!(rodeo.get("d").is_some());
-        assert!(rodeo.get("e").is_some());
+        paracord.extend(["a", "b", "c", "d", "e"].iter());
+        assert!(paracord.get("a").is_some());
+        assert!(paracord.get("b").is_some());
+        assert!(paracord.get("c").is_some());
+        assert!(paracord.get("d").is_some());
+        assert!(paracord.get("e").is_some());
     }
 
     // Test for race conditions on key insertion
     // https://github.com/Kixiron/lasso/issues/18
     #[test]
-    #[cfg(not(miri))]
     fn get_or_intern_threaded_racy() {
         const THREADS: usize = 10;
 
-        let mut handles = Vec::with_capacity(THREADS);
-        let barrier = Arc::new(Barrier::new(THREADS));
-        let rodeo = Arc::new(ParaCord::default());
+        let barrier = Barrier::new(THREADS);
+        let paracord = ParaCord::default();
         let expected = Key::try_from_repr(0).unwrap();
 
-        for _ in 0..THREADS {
-            let moved_rodeo = Arc::clone(&rodeo);
-            let moved_barrier = Arc::clone(&barrier);
-
-            handles.push(thread::spawn(move || {
-                moved_barrier.wait();
-                assert_eq!(expected, moved_rodeo.get_or_intern("A"));
-                assert_eq!(expected, moved_rodeo.get_or_intern("A"));
-                assert_eq!(expected, moved_rodeo.get_or_intern("A"));
-                assert_eq!(expected, moved_rodeo.get_or_intern("A"));
-            }));
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
+        std::thread::scope(|s| {
+            for _ in 0..THREADS {
+                s.spawn(|| {
+                    barrier.wait();
+                    assert_eq!(expected, paracord.get_or_intern("A"));
+                    assert_eq!(expected, paracord.get_or_intern("A"));
+                    assert_eq!(expected, paracord.get_or_intern("A"));
+                    assert_eq!(expected, paracord.get_or_intern("A"));
+                });
+            }
+        });
     }
 
     #[test]
