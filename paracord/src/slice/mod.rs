@@ -94,8 +94,8 @@ struct Collection<T> {
 impl<T> Default for Collection<T> {
     fn default() -> Self {
         Self {
-            table: Default::default(),
-            alloc: Default::default(),
+            table: HashTable::default(),
+            alloc: Alloc::default(),
         }
     }
 }
@@ -107,7 +107,7 @@ struct TableEntry<T> {
 
 impl<T> TableEntry<T> {
     fn new(ptr: InternedPtr<T>, key: Key) -> Self {
-        Self { key, ptr }
+        Self { ptr, key }
     }
 
     fn slice(&self) -> &[T] {
@@ -117,7 +117,7 @@ impl<T> TableEntry<T> {
 
 impl<T> Default for ParaCord<T> {
     fn default() -> Self {
-        Self::with_hasher(Default::default())
+        Self::with_hasher(foldhash::fast::RandomState::default())
     }
 }
 
@@ -251,7 +251,7 @@ impl<T, S> ParaCord<T, S> {
         self.keys_to_slice.clear();
         self.slice_to_keys.shards_mut().iter_mut().for_each(|s| {
             s.get_mut().table.clear();
-            drop(core::mem::take(&mut s.get_mut().alloc))
+            drop(core::mem::take(&mut s.get_mut().alloc));
         });
     }
 

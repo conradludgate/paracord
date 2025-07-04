@@ -58,8 +58,9 @@ impl<T: Copy> Alloc<T> {
     fn alloc(&mut self, s: &[T]) -> &mut [T] {
         /// Polyfill for [`MaybeUninit::copy_from_slice`]
         fn copy_from_slice<'a, T: Copy>(this: &'a mut [MaybeUninit<T>], src: &[T]) -> &'a mut [T] {
-            // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
-            let uninit_src: &[MaybeUninit<T>] = unsafe { core::mem::transmute(src) };
+            let uninit_src: &[MaybeUninit<T>] =
+                // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+                unsafe { &*(src as *const [T] as *const [std::mem::MaybeUninit<T>]) };
 
             this.copy_from_slice(uninit_src);
 

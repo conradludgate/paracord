@@ -155,7 +155,7 @@ impl Key {
         NonZeroU32::new(x ^ u32::MAX).map(Self)
     }
 
-    /// Safety: i must be less than u32::MAX
+    /// Safety: i must be less than `u32::MAX`
     #[inline]
     unsafe fn new_unchecked(i: u32) -> Self {
         // SAFETY: from caller
@@ -225,7 +225,7 @@ impl<S> fmt::Debug for ParaCord<S> {
 impl Default for ParaCord {
     #[inline]
     fn default() -> Self {
-        Self::with_hasher(Default::default())
+        Self::with_hasher(foldhash::fast::RandomState::default())
     }
 }
 
