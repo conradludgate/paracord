@@ -23,13 +23,11 @@
 //! assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 //! ```
 
-use core::fmt;
-use std::{
-    hash::{BuildHasher, Hash},
-    ops::Index,
-};
-
 use alloc::{Alloc, InternedPtr};
+use core::fmt;
+use std::hash::{BuildHasher, Hash};
+use std::ops::Index;
+
 use clashmap::ClashCollection;
 use hashbrown::HashTable;
 
@@ -343,9 +341,8 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
 }
 
 pub(crate) mod iter_private {
-    use crate::Key;
-
     use super::InternedPtr;
+    use crate::Key;
 
     pub struct Iter<'a, T> {
         pub(super) inner: boxcar::Iter<'a, InternedPtr<T>>,

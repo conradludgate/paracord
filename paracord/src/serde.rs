@@ -1,7 +1,8 @@
 use std::hash::{BuildHasher, Hash};
 
-use crate::{slice, Key, ParaCord};
 use serde::de::{DeserializeSeed, Visitor};
+
+use crate::{slice, Key, ParaCord};
 
 pub struct SerdeVisitor<'a, S>(pub &'a ParaCord<S>);
 
@@ -79,7 +80,5 @@ macro_rules! custom_key_serde {
     };
 }
 
-pub use {
-    custom_key_serde,
-    serde::{Deserialize, Deserializer, Serialize, Serializer},
-};
+pub use custom_key_serde;
+pub use serde::{Deserialize, Deserializer, Serialize, Serializer};

@@ -74,11 +74,9 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use core::fmt;
-use std::{
-    hash::{BuildHasher, Hash},
-    num::NonZeroU32,
-    ops::Index,
-};
+use std::hash::{BuildHasher, Hash};
+use std::num::NonZeroU32;
+use std::ops::Index;
 
 pub mod slice;
 
@@ -143,6 +141,7 @@ impl Key {
     /// let key2 = Key::try_from_repr(key.into_repr()).unwrap();
     /// assert_eq!(key, key2);
     /// ``````
+    #[inline]
     pub fn into_repr(self) -> u32 {
         self.0.get() ^ u32::MAX
     }
@@ -151,16 +150,19 @@ impl Key {
     ///
     /// The only guarantee is that [`Key::into_repr`] is the inverse of this function,
     /// and will always return the same u32.
+    #[inline]
     pub fn try_from_repr(x: u32) -> Option<Self> {
         NonZeroU32::new(x ^ u32::MAX).map(Self)
     }
 
     /// Safety: i must be less than u32::MAX
+    #[inline]
     unsafe fn new_unchecked(i: u32) -> Self {
         // SAFETY: from caller
         Key(unsafe { NonZeroU32::new_unchecked(i ^ u32::MAX) })
     }
 
+    #[inline]
     fn from_index(i: usize) -> Self {
         if usize::BITS >= 32 {
             assert!(i < u32::MAX as usize);
@@ -221,6 +223,7 @@ impl<S> fmt::Debug for ParaCord<S> {
 }
 
 impl Default for ParaCord {
+    #[inline]
     fn default() -> Self {
         Self::with_hasher(Default::default())
     }
@@ -240,6 +243,7 @@ impl<S: BuildHasher> ParaCord<S> {
     /// let foo = paracord.get_or_intern("foo");
     /// assert_eq!(paracord.resolve(foo), "foo");
     /// ```
+    #[inline]
     pub fn with_hasher(hasher: S) -> Self {
         Self {
             inner: slice::ParaCord::with_hasher(hasher),
@@ -259,6 +263,7 @@ impl<S: BuildHasher> ParaCord<S> {
     /// assert_eq!(paracord.get("foo"), Some(foo));
     /// assert_eq!(paracord.get("bar"), None);
     /// ```
+    #[inline]
     pub fn get(&self, s: &str) -> Option<Key> {
         self.inner.get(s.as_bytes())
     }
@@ -279,6 +284,7 @@ impl<S: BuildHasher> ParaCord<S> {
     /// assert_ne!(foo, bar);
     /// assert_eq!(foo, foo2);
     /// ```
+    #[inline]
     pub fn get_or_intern(&self, s: &str) -> Key {
         self.inner.get_or_intern(s.as_bytes())
     }
@@ -303,6 +309,7 @@ impl<S> ParaCord<S> {
     /// let paracord = ParaCord::default();
     /// assert_eq!(paracord.try_resolve(foo), None);
     /// ```
+    #[inline]
     pub fn try_resolve(&self, key: Key) -> Option<&str> {
         self.inner
             .try_resolve(key)
@@ -326,6 +333,7 @@ impl<S> ParaCord<S> {
     /// let foo = paracord.get_or_intern("foo");
     /// assert_eq!(paracord.resolve(foo), "foo");
     /// ```
+    #[inline]
     pub fn resolve(&self, key: Key) -> &str {
         let b = self.inner.resolve(key);
 
@@ -350,6 +358,7 @@ impl<S> ParaCord<S> {
     /// // and we never clear the paracord instance.
     /// assert_eq!(unsafe { paracord.resolve_unchecked(foo) }, "foo");
     /// ```
+    #[inline]
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &str {
         // Safety: from caller.
         let b = unsafe { self.inner.resolve_unchecked(key) };
@@ -369,6 +378,7 @@ impl<S> ParaCord<S> {
     /// let _ = paracord.get_or_intern("foo");
     /// assert_eq!(paracord.len(), 1);
     /// ```
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
@@ -386,6 +396,7 @@ impl<S> ParaCord<S> {
     /// let _ = paracord.get_or_intern("foo");
     /// assert!(!paracord.is_empty());
     /// ```
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
@@ -405,6 +416,7 @@ impl<S> ParaCord<S> {
     /// let entries: Vec<_> = paracord.iter().collect();
     /// assert_eq!(entries, vec![(foo, "foo"), (bar, "bar")]);
     /// ```
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (Key, &str)> {
         self.into_iter()
     }
@@ -425,6 +437,7 @@ impl<S> ParaCord<S> {
     ///
     /// assert_eq!(paracord.try_resolve(foo), None);
     /// ```
+    #[inline]
     pub fn clear(&mut self) {
         self.inner.clear();
     }
@@ -484,14 +497,11 @@ impl<'a, S> IntoIterator for &'a ParaCord<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::hash_map::RandomState,
-        sync::{Arc, Barrier},
-        thread,
-    };
+    use std::collections::hash_map::RandomState;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
-    use crate::ParaCord;
-    use crate::{DefaultKey, Key};
+    use crate::{DefaultKey, Key, ParaCord};
 
     #[test]
     fn works() {

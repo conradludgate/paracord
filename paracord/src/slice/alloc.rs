@@ -1,15 +1,13 @@
-use std::{
-    hash::{BuildHasher, Hash},
-    mem::MaybeUninit,
-};
+use std::hash::{BuildHasher, Hash};
+use std::mem::MaybeUninit;
 
 use hashbrown::hash_table::Entry;
 use sync_wrapper::SyncWrapper;
 use typed_arena::Arena;
 
-use crate::{slice::ParaCord, Key};
-
 use super::TableEntry;
+use crate::slice::{Collection, ParaCord};
+use crate::Key;
 
 pub(super) struct Alloc<T>(SyncWrapper<Arena<T>>);
 

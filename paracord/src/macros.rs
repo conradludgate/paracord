@@ -67,6 +67,7 @@ macro_rules! custom_key {
         $vis struct $key($crate::Key);
 
         impl $key {
+            #[inline]
             fn paracord() -> &'static $crate::ParaCord<$s> {
                 static S: ::std::sync::OnceLock<$crate::ParaCord<$s>> = ::std::sync::OnceLock::new();
                 S.get_or_init(|| $crate::ParaCord::with_hasher($init))
@@ -74,17 +75,20 @@ macro_rules! custom_key {
 
             /// Try and get the key associated with the given string.
             /// Returns [`None`] if not found.
+            #[inline]
             pub fn try_new_existing(s: &str) -> Option<Self> {
                 Self::paracord().get(s).map(Self)
             }
 
             /// Create a new key associated with the given string.
             /// Returns the same key if called repeatedly.
+            #[inline]
             pub fn new(s: &str) -> Self {
                 Self(Self::paracord().get_or_intern(s))
             }
 
             /// Resolve the string associated with this key.
+            #[inline]
             pub fn as_str(&self) -> &'static str {
                 // Safety: The key can only be constructed from the static paracord,
                 // and the paracord will never be reset.
@@ -92,6 +96,7 @@ macro_rules! custom_key {
             }
 
             /// Determine how many keys have been allocated
+            #[inline]
             pub fn count() -> usize {
                 Self::paracord().len()
             }
@@ -99,6 +104,7 @@ macro_rules! custom_key {
             /// Get an iterator over every
             #[doc = concat!("(`",stringify!($key),"`, `&str`)")]
             /// pair that has been allocated.
+            #[inline]
             pub fn iter() -> impl Iterator<Item = (Self, &'static str)> {
                 Self::paracord().iter().map(|(k, s)| (Self(k), s))
             }
@@ -112,6 +118,7 @@ macro_rules! custom_key {
         }
 
         impl ::core::convert::AsRef<str> for $key {
+            #[inline]
             fn as_ref(&self) -> &str {
                 self.as_str()
             }
@@ -119,6 +126,7 @@ macro_rules! custom_key {
 
         impl ::core::ops::Deref for $key {
             type Target = str;
+            #[inline]
             fn deref(&self) -> &str {
                 self.as_str()
             }
