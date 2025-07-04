@@ -76,9 +76,9 @@ mod alloc;
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
-    slice_to_keys: HashTable<TableEntry<T>, NoDealloc>,
+    slice_to_keys: HashTable<InternedPtr<T>, NoDealloc>,
     alloc: ClashCollection<Alloc<T>>,
-    keys_to_slice: boxcar::Vec<TableEntry<T>>,
+    keys_to_slice: boxcar::Vec<InternedPtr<T>>,
     hasher: S,
 }
 
@@ -91,22 +91,6 @@ impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
 struct NoDealloc;
 impl<T> papaya::table::Dealloc<T> for NoDealloc {
     unsafe fn dealloc(_: *mut T) {}
-}
-
-#[repr(align(8))]
-struct TableEntry<T> {
-    ptr: InternedPtr<T>,
-    key: Key,
-}
-
-impl<T> TableEntry<T> {
-    fn new(ptr: InternedPtr<T>, key: Key) -> Self {
-        Self { ptr, key }
-    }
-
-    fn slice(&self) -> &[T] {
-        self.ptr.slice()
-    }
 }
 
 impl<T> Default for ParaCord<T> {
@@ -161,15 +145,15 @@ impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
 }
 
 fn find<T: Hash + Eq>(
-    slice_to_keys: &HashTable<TableEntry<T>, NoDealloc>,
+    slice_to_keys: &HashTable<InternedPtr<T>, NoDealloc>,
     s: &[T],
     hash: u64,
     guard: &impl VerifiedGuard,
 ) -> Option<Key> {
     // safety: k is allocated correct
-    let eq = |k: *mut TableEntry<T>| unsafe { s == (*k).slice() };
+    let eq = |k: *mut InternedPtr<T>| unsafe { s == (*k).slice() };
     // safety: k is allocated correct
-    let map = |k: *mut TableEntry<T>| unsafe { (*k).key };
+    let map = |k: *mut InternedPtr<T>| unsafe { (*k).key };
 
     slice_to_keys.find(hash, eq, guard).map(map)
 }
@@ -264,8 +248,6 @@ impl<T, S> ParaCord<T, S> {
     #[cfg(test)]
     /// Determine how much space has been used to allocate all the slices.
     pub(crate) fn current_memory_usage(&mut self) -> usize {
-        let keys_size = self.keys_to_slice.count() * core::mem::size_of::<*const str>();
-
         let shards_size = {
             let acc = core::mem::size_of_val(self.alloc.shards());
             self.alloc.shards_mut().iter_mut().fold(acc, |acc, shard| {
@@ -274,7 +256,13 @@ impl<T, S> ParaCord<T, S> {
             })
         };
 
-        let map_size = self.slice_to_keys.len() * (1 + size_of::<*const ()>());
+        // no way to get capacity, so let's just round up.
+        let keys_size =
+            self.keys_to_slice.count().next_power_of_two() * core::mem::size_of::<InternedPtr<T>>();
+
+        // no way to get capacity, so let's just round up.
+        let map_size =
+            self.slice_to_keys.len().next_power_of_two() * (1 + size_of::<*const InternedPtr<T>>());
 
         size_of::<Self>() + keys_size + shards_size + map_size
     }
@@ -355,11 +343,11 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
 }
 
 pub(crate) mod iter_private {
-    use super::TableEntry;
+    use super::InternedPtr;
     use crate::Key;
 
     pub struct Iter<'a, T> {
-        pub(super) inner: boxcar::Iter<'a, TableEntry<T>>,
+        pub(super) inner: boxcar::Iter<'a, InternedPtr<T>>,
     }
 
     impl<'a, T> Iterator for Iter<'a, T> {

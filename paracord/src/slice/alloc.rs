@@ -5,7 +5,6 @@ use papaya::table::{HashTable, InsertResult, VerifiedGuard};
 use sync_wrapper::SyncWrapper;
 use typed_arena::Arena;
 
-use super::TableEntry;
 use crate::slice::{find, NoDealloc, ParaCord};
 use crate::Key;
 
@@ -27,10 +26,11 @@ impl<T> Alloc<T> {
 /// Represents a `&'_ [T]`, with a length limited to u32 and with an
 /// undescribed lifetime because it's technically self-ref.
 #[derive(Clone, Copy)]
-#[repr(packed)]
+#[repr(align(8))]
 pub(super) struct InternedPtr<T> {
     ptr: *const T,
     len: u32,
+    pub(super) key: Key,
 }
 
 // Safety: `VecEntry` has the same safety requirements as `&[T]`
@@ -39,11 +39,12 @@ unsafe impl<T: Sync> Sync for InternedPtr<T> {}
 unsafe impl<T: Sync> Send for InternedPtr<T> {}
 
 impl<T> InternedPtr<T> {
-    fn new(s: &[T]) -> Self {
+    fn new(s: &[T], key: Key) -> Self {
         let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
         Self {
             len,
             ptr: s.as_ptr(),
+            key,
         }
     }
 
@@ -121,8 +122,8 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
 }
 
 fn intern_inner_locked<T: Hash + Eq + Copy, S: BuildHasher>(
-    slice_to_keys: &HashTable<TableEntry<T>, NoDealloc>,
-    keys_to_slice: &boxcar::Vec<TableEntry<T>>,
+    slice_to_keys: &HashTable<InternedPtr<T>, NoDealloc>,
+    keys_to_slice: &boxcar::Vec<InternedPtr<T>>,
     alloc: &mut Alloc<T>,
     h: &S,
     s: &[T],
@@ -136,18 +137,17 @@ fn intern_inner_locked<T: Hash + Eq + Copy, S: BuildHasher>(
     let key = keys_to_slice.push_with(|key| {
         let key = Key::from_index(key);
         let s = alloc.alloc(s);
-        let s = InternedPtr::new(s);
-        TableEntry::new(s, key)
+        InternedPtr::new(s, key)
     });
     // safety: we have just inserted this entry
     let entry = unsafe { keys_to_slice.get_unchecked(key) };
 
     // safety: k is allocated correct
-    let eq = |k: *mut TableEntry<T>| unsafe { s == (*k).slice() };
+    let eq = |k: *mut InternedPtr<T>| unsafe { s == (*k).slice() };
     // safety: k is allocated correct
-    let hasher = |k: *mut TableEntry<T>| unsafe { h.hash_one((*k).slice()) };
+    let hasher = |k: *mut InternedPtr<T>| unsafe { h.hash_one((*k).slice()) };
 
-    let k = entry as *const TableEntry<T> as *mut TableEntry<T>;
+    let k = entry as *const InternedPtr<T> as *mut InternedPtr<T>;
     let res = slice_to_keys.insert(hash, k, eq, hasher, false, guard);
 
     match res {
