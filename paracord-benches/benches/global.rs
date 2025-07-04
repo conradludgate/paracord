@@ -12,29 +12,39 @@ mod ustr {
 
     #[divan::bench]
     fn get_or_intern(b: Bencher) {
-        b.with_inputs(|| fastrand::u32(10000000..=99999999).to_string())
-            .bench_refs(|s| black_box_drop(Ustr::from(s)));
+        b.with_inputs(|| fastrand::u32(10000000..=99999999))
+            .bench_values(|s| black_box_drop(Ustr::from(itoa::Buffer::new().format(s))));
     }
 
     #[divan::bench]
     fn get(b: Bencher) {
-        for x in 100000..=999999 {
-            Ustr::from(&x.to_string());
+        for x in 1000000..=1999999 {
+            Ustr::from(itoa::Buffer::new().format(x));
         }
 
-        b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-            .bench_refs(|s| black_box_drop(Ustr::from_existing(s)));
+        b.with_inputs(|| fastrand::u32(1000000..=1999999))
+            .bench_values(|s| black_box_drop(Ustr::from_existing(itoa::Buffer::new().format(s))));
     }
 
     #[divan::bench]
     fn resolve(b: Bencher) {
         let mut keys = vec![];
-        for x in 100000..=999999 {
-            keys.push(Ustr::from(&x.to_string()));
+        for x in 2000000..=2999999 {
+            keys.push(Ustr::from(itoa::Buffer::new().format(x)));
         }
 
         b.with_inputs(|| *fastrand::choice(&keys).unwrap())
             .bench_values(|key| black_box_drop(&*key));
+    }
+
+    #[divan::bench]
+    fn get_or_intern_existing(b: Bencher) {
+        for x in 3000000..=3999999 {
+            Ustr::from(itoa::Buffer::new().format(x));
+        }
+
+        b.with_inputs(|| fastrand::u32(3000000..=3999999))
+            .bench_values(|s| black_box_drop(Ustr::from(itoa::Buffer::new().format(s))));
     }
 }
 
@@ -46,29 +56,41 @@ mod paracord {
 
     #[divan::bench]
     fn get_or_intern(b: Bencher) {
-        b.with_inputs(|| fastrand::u32(10000000..=99999999).to_string())
-            .bench_refs(|s| black_box_drop(Global::new(s)));
+        b.with_inputs(|| fastrand::u32(10000000..=99999999))
+            .bench_values(|s| black_box_drop(Global::new(itoa::Buffer::new().format(s))));
     }
 
     #[divan::bench]
     fn get(b: Bencher) {
-        for x in 100000..=999999 {
-            Global::new(&x.to_string());
+        for x in 1000000..=1999999 {
+            Global::new(itoa::Buffer::new().format(x));
         }
 
-        b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-            .bench_refs(|s| black_box_drop(Global::try_new_existing(s).unwrap()));
+        b.with_inputs(|| fastrand::u32(1000000..=1999999))
+            .bench_values(|s| {
+                black_box_drop(Global::try_new_existing(itoa::Buffer::new().format(s)).unwrap())
+            });
     }
 
     #[divan::bench]
     fn resolve(b: Bencher) {
         let mut keys = vec![];
-        for x in 100000..=999999 {
-            keys.push(Global::new(&x.to_string()));
+        for x in 2000000..=2999999 {
+            keys.push(Global::new(itoa::Buffer::new().format(x)));
         }
 
         b.with_inputs(|| *fastrand::choice(&keys).unwrap())
             .bench_values(|key| black_box_drop(key.as_str()));
+    }
+
+    #[divan::bench]
+    fn get_or_intern_existing(b: Bencher) {
+        for x in 3000000..=3999999 {
+            Global::new(itoa::Buffer::new().format(x));
+        }
+
+        b.with_inputs(|| fastrand::u32(3000000..=3999999))
+            .bench_values(|s| black_box_drop(Global::new(itoa::Buffer::new().format(s))));
     }
 }
 
@@ -105,28 +127,38 @@ mod lasso {
 
     #[divan::bench]
     fn get_or_intern(b: Bencher) {
-        b.with_inputs(|| fastrand::u32(10000000..=99999999).to_string())
-            .bench_refs(|s| black_box_drop(Global::get_or_intern(s)));
+        b.with_inputs(|| fastrand::u32(10000000..=99999999))
+            .bench_values(|s| black_box_drop(Global::get_or_intern(itoa::Buffer::new().format(s))));
     }
 
     #[divan::bench]
     fn get(b: Bencher) {
-        for x in 100000..=999999 {
-            Global::get_or_intern(&x.to_string());
+        for x in 1000000..=1999999 {
+            Global::get_or_intern(itoa::Buffer::new().format(x));
         }
 
-        b.with_inputs(|| fastrand::u32(100000..=999999).to_string())
-            .bench_refs(|s| black_box_drop(Global::get(s).unwrap()));
+        b.with_inputs(|| fastrand::u32(1000000..=1999999))
+            .bench_values(|s| black_box_drop(Global::get(itoa::Buffer::new().format(s)).unwrap()));
     }
 
     #[divan::bench]
     fn resolve(b: Bencher) {
         let mut keys = vec![];
-        for x in 100000..=999999 {
-            keys.push(Global::get_or_intern(&x.to_string()));
+        for x in 2000000..=2999999 {
+            keys.push(Global::get_or_intern(itoa::Buffer::new().format(x)));
         }
 
         b.with_inputs(|| *fastrand::choice(&keys).unwrap())
             .bench_values(|key| black_box_drop(key.resolve()));
+    }
+
+    #[divan::bench]
+    fn get_or_intern_existing(b: Bencher) {
+        for x in 3000000..=3999999 {
+            Global::get_or_intern(itoa::Buffer::new().format(x));
+        }
+
+        b.with_inputs(|| fastrand::u32(3000000..=3999999))
+            .bench_values(|s| black_box_drop(Global::get_or_intern(itoa::Buffer::new().format(s))));
     }
 }

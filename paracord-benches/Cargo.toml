@@ -11,6 +11,7 @@ rust-version = "1.80.0"
 divan = { git = "https://github.com/conradludgate/divan", branch = "singletons" }
 fastrand = "2"
 foldhash = "0.1"
+itoa = "1"
 
 paracord = { path = "../paracord" }
 lasso = { version = "0.7", features = ["multi-threaded"] }
