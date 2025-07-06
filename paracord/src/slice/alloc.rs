@@ -5,7 +5,6 @@ use hashbrown::hash_table::Entry;
 use sync_wrapper::SyncWrapper;
 use typed_arena::Arena;
 
-use super::TableEntry;
 use crate::slice::{Collection, ParaCord};
 use crate::Key;
 
@@ -27,10 +26,11 @@ impl<T> Alloc<T> {
 /// Represents a `&'_ [T]`, with a length limited to u32 and with an
 /// undescribed lifetime because it's technically self-ref.
 #[derive(Clone, Copy)]
-#[repr(packed)]
+#[repr(align(8))]
 pub(super) struct InternedPtr<T> {
     ptr: *const T,
     len: u32,
+    pub(super) key: Key,
 }
 
 // Safety: `VecEntry` has the same safety requirements as `&[T]`
@@ -39,11 +39,12 @@ unsafe impl<T: Sync> Sync for InternedPtr<T> {}
 unsafe impl<T: Sync> Send for InternedPtr<T> {}
 
 impl<T> InternedPtr<T> {
-    fn new(s: &[T]) -> Self {
+    fn new(s: &[T], key: Key) -> Self {
         let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
         Self {
-            len,
             ptr: s.as_ptr(),
+            len,
+            key,
         }
     }
 
@@ -88,22 +89,28 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     pub(super) fn intern_slow(&self, s: &[T], hash: u64) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let h = &self.hasher;
         let Collection { table, alloc } = &mut *self.slice_to_keys.get_write_shard(hash);
 
-        match table.entry(hash, |k| s == k.slice(), |k| h.hash_one(k.slice())) {
-            Entry::Occupied(entry) => entry.get().key,
+        // safety: k is allocated correct
+        let eq = |k: &*const InternedPtr<T>| unsafe { s == (**k).slice() };
+        // safety: k is allocated correct
+        let hasher = |k: &*const InternedPtr<T>| unsafe { self.hasher.hash_one((**k).slice()) };
+
+        match table.entry(hash, eq, hasher) {
+            // safety: entry is allocated correct
+            Entry::Occupied(entry) => unsafe { (**entry.get()).key },
             Entry::Vacant(entry) => {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
                     let s = alloc.alloc(s);
-                    let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key));
-                    s
+                    InternedPtr::new(s, key)
                 });
 
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key as u32) }
+                // safety: we have just inserted this entry
+                let interned_ptr = unsafe { self.keys_to_slice.get_unchecked(key) };
+                entry.insert(interned_ptr as *const InternedPtr<T>);
+
+                interned_ptr.key
             }
         }
     }
@@ -112,22 +119,29 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
         let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let h = &self.hasher;
         let Collection { table, alloc } = &mut *self.slice_to_keys.get_mut(hash);
 
-        match table.entry(hash, |k| s == k.slice(), |k| h.hash_one(k.slice())) {
-            Entry::Occupied(entry) => entry.get().key,
+        // safety: k is allocated correct
+        let eq = |k: &*const InternedPtr<T>| unsafe { s == (**k).slice() };
+        // safety: k is allocated correct
+        let hasher = |k: &*const InternedPtr<T>| unsafe { self.hasher.hash_one((**k).slice()) };
+
+        match table.entry(hash, eq, hasher) {
+            // safety: entry is allocated correct
+            Entry::Occupied(entry) => unsafe { (**entry.get()).key },
             Entry::Vacant(entry) => {
                 let key = self.keys_to_slice.push_with(|key| {
                     let key = Key::from_index(key);
                     let s = alloc.alloc(s);
-                    let s = InternedPtr::new(s);
-                    entry.insert(TableEntry::new(s, key));
-                    s
+                    InternedPtr::new(s, key)
                 });
 
-                // SAFETY: as asserted the key is correct
-                unsafe { Key::new_unchecked(key as u32) }
+                // safety: we have just inserted this entry
+                let interned_ptr = unsafe { self.keys_to_slice.get_unchecked(key) };
+
+                entry.insert(interned_ptr as *const InternedPtr<T>);
+
+                interned_ptr.key
             }
         }
     }

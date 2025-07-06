@@ -87,9 +87,12 @@ impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
 }
 
 struct Collection<T> {
-    table: HashTable<TableEntry<T>>,
+    table: HashTable<*const InternedPtr<T>>,
     alloc: Alloc<T>,
 }
+
+unsafe impl<T: Sync> Sync for Collection<T> {}
+unsafe impl<T: Sync> Send for Collection<T> {}
 
 impl<T> Default for Collection<T> {
     fn default() -> Self {
@@ -97,21 +100,6 @@ impl<T> Default for Collection<T> {
             table: HashTable::default(),
             alloc: Alloc::default(),
         }
-    }
-}
-
-struct TableEntry<T> {
-    ptr: InternedPtr<T>,
-    key: Key,
-}
-
-impl<T> TableEntry<T> {
-    fn new(ptr: InternedPtr<T>, key: Key) -> Self {
-        Self { ptr, key }
-    }
-
-    fn slice(&self) -> &[T] {
-        self.ptr.slice()
     }
 }
 
@@ -161,7 +149,13 @@ impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
     pub fn get(&self, s: &[T]) -> Option<Key> {
         let hash = self.hasher.hash_one(s);
         let shard = self.slice_to_keys.get_read_shard(hash);
-        shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
+
+        // safety: k is allocated correct
+        let eq = |k: &*const InternedPtr<T>| unsafe { s == (**k).slice() };
+        // safety: k is allocated correct
+        let map = |k: &*const InternedPtr<T>| unsafe { (**k).key };
+
+        shard.table.find(hash, eq).map(map)
     }
 }
 
@@ -186,8 +180,13 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         let hash = self.hasher.hash_one(s);
 
         let key = {
+            // safety: k is allocated correct
+            let eq = |k: &*const InternedPtr<T>| unsafe { s == (**k).slice() };
+            // safety: k is allocated correct
+            let map = |k: &*const InternedPtr<T>| unsafe { (**k).key };
+
             let shard = self.slice_to_keys.get_read_shard(hash);
-            shard.table.find(hash, |k| s == k.slice()).map(|k| k.key)
+            shard.table.find(hash, eq).map(map)
         };
 
         let Some(key) = key else {
@@ -258,7 +257,7 @@ impl<T, S> ParaCord<T, S> {
     #[cfg(test)]
     /// Determine how much space has been used to allocate all the slices.
     pub(crate) fn current_memory_usage(&mut self) -> usize {
-        let keys_size = self.keys_to_slice.count() * core::mem::size_of::<*const str>();
+        let keys_size = self.keys_to_slice.count() * core::mem::size_of::<InternedPtr<T>>();
 
         let shards_size = {
             let acc = core::mem::size_of_val(self.slice_to_keys.shards());

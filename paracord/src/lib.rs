@@ -837,8 +837,8 @@ mod tests {
         let mem = interner.current_memory_usage();
         let len = interner.len();
 
-        // average 86 bytes per string.
-        // average string length is 24, so 62 bytes overhead.
-        assert_eq!(mem / len, 86);
+        // average 57 bytes per string.
+        // average string length is 24, so 33 bytes overhead.
+        assert_eq!(mem / len, 57);
     }
 }
