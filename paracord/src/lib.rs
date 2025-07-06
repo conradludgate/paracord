@@ -472,6 +472,28 @@ impl<S> Index<Key> for ParaCord<S> {
     }
 }
 
+#[repr(transparent)]
+struct AsBytes<S: AsRef<str>>(S);
+impl<S: AsRef<str>> AsRef<[u8]> for AsBytes<S> {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref().as_bytes()
+    }
+}
+
+impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for crate::ParaCord<S> {
+    fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
+        Self {
+            inner: iter.into_iter().map(AsBytes).collect(),
+        }
+    }
+}
+
+impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
+    fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
+        self.inner.extend(iter.into_iter().map(AsBytes));
+    }
+}
+
 mod iter_private {
     use crate::Key;
 

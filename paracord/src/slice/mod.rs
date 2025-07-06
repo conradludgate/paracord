@@ -29,12 +29,13 @@ use std::hash::{BuildHasher, Hash};
 use std::ops::Index;
 
 use clashmap::ClashCollection;
-use papaya::table::{HashTable, VerifiedGuard};
-use seize::Collector;
+use papaya::table::VerifiedGuard;
 
+use crate::slice::lock_free::LockFreeParacord;
 use crate::Key;
 
 mod alloc;
+mod lock_free;
 
 /// [`ParaCord`] is a lightweight, thread-safe, memory efficient [string interer](https://en.wikipedia.org/wiki/String_interning).
 ///
@@ -76,21 +77,15 @@ mod alloc;
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
-    slice_to_keys: HashTable<InternedPtr<T>, NoDealloc>,
+    // stores pointers to alloc, so must be dropped first
+    lock_free: LockFreeParacord<T, S>,
     alloc: ClashCollection<Alloc<T>>,
-    keys_to_slice: boxcar::Vec<InternedPtr<T>>,
-    hasher: S,
 }
 
 impl<T: fmt::Debug, S> fmt::Debug for ParaCord<T, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
-}
-
-struct NoDealloc;
-impl<T> papaya::table::Dealloc<T> for NoDealloc {
-    unsafe fn dealloc(_: *mut T) {}
 }
 
 impl<T> Default for ParaCord<T> {
@@ -115,10 +110,8 @@ impl<T, S: BuildHasher> ParaCord<T, S> {
     /// ```
     pub fn with_hasher(hasher: S) -> Self {
         Self {
-            keys_to_slice: boxcar::Vec::default(),
-            slice_to_keys: HashTable::new(0, Collector::new(), papaya::ResizeMode::Incremental(64)),
+            lock_free: LockFreeParacord::with_capacity_and_hasher(0, hasher),
             alloc: ClashCollection::default(),
-            hasher,
         }
     }
 }
@@ -138,24 +131,10 @@ impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
     /// assert_eq!(paracord.get(&[5,6,7,8]), None);
     /// ```
     pub fn get(&self, s: &[T]) -> Option<Key> {
-        let hash = self.hasher.hash_one(s);
-        let guard = self.slice_to_keys.guard();
-        find(&self.slice_to_keys, s, hash, &guard)
+        let hash = self.lock_free.hasher.hash_one(s);
+        let guard = self.lock_free.slice_to_keys.guard();
+        self.lock_free.find(s, hash, &guard)
     }
-}
-
-fn find<T: Hash + Eq>(
-    slice_to_keys: &HashTable<InternedPtr<T>, NoDealloc>,
-    s: &[T],
-    hash: u64,
-    guard: &impl VerifiedGuard,
-) -> Option<Key> {
-    // safety: k is allocated correct
-    let eq = |k: *mut InternedPtr<T>| unsafe { s == (*k).slice() };
-    // safety: k is allocated correct
-    let map = |k: *mut InternedPtr<T>| unsafe { (*k).key };
-
-    slice_to_keys.find(hash, eq, guard).map(map)
 }
 
 impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
@@ -176,13 +155,29 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
     /// assert_eq!(foo, foo2);
     /// ```
     pub fn get_or_intern(&self, s: &[T]) -> Key {
-        let hash = self.hasher.hash_one(s);
-        let guard = self.slice_to_keys.guard();
+        let hash = self.lock_free.hasher.hash_one(s);
+        let guard = self.lock_free.slice_to_keys.guard();
 
-        let Some(key) = find(&self.slice_to_keys, s, hash, &guard) else {
-            return self.intern_slow(s, hash, &guard);
-        };
-        key
+        if let Some(key) = self.lock_free.find(s, hash, &guard) {
+            return key;
+        }
+
+        self.intern_slow(s, hash, &guard)
+    }
+
+    #[cold]
+    pub(super) fn intern_slow(&self, s: &[T], hash: u64, guard: &impl VerifiedGuard) -> Key {
+        let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
+
+        let mut alloc = self.alloc.get_write_shard(hash);
+
+        if let Some(key) = self.lock_free.find(s, hash, guard) {
+            return key;
+        }
+
+        // hold the alloc lock while inserting.
+        // this ensures no other thread allocates the same slice
+        self.lock_free.insert(alloc.alloc(s), hash, guard)
     }
 }
 
@@ -193,7 +188,7 @@ impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// a different [`ParaCord`] instance, but it might return an arbitrary slice
     /// as well.
     pub fn try_resolve(&self, key: Key) -> Option<&[T]> {
-        let s = self.keys_to_slice.get(key.into_repr() as usize)?;
+        let s = self.lock_free.keys_to_slice.get(key.into_repr() as usize)?;
         Some(s.slice())
     }
 
@@ -204,7 +199,7 @@ impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// a different [`ParaCord`] instance, but it might return an arbitrary slice
     /// as well.
     pub fn resolve(&self, key: Key) -> &[T] {
-        self.keys_to_slice[key.into_repr() as usize].slice()
+        self.lock_free.keys_to_slice[key.into_repr() as usize].slice()
     }
 
     /// Resolve the slice associated with this [`Key`].
@@ -214,19 +209,24 @@ impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// and [`ParaCord::clear`] must not have been called.
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &[T] {
         // Safety: If the key was allocated in self, then key is inbounds.
-        unsafe { self.keys_to_slice.get_unchecked(key.into_repr() as usize) }.slice()
+        unsafe {
+            self.lock_free
+                .keys_to_slice
+                .get_unchecked(key.into_repr() as usize)
+        }
+        .slice()
     }
 }
 
 impl<T, S> ParaCord<T, S> {
     /// Determine how many slices have been allocated
     pub fn len(&self) -> usize {
-        self.keys_to_slice.count()
+        self.lock_free.keys_to_slice.count()
     }
 
     /// Determine if no slices have been allocated
     pub fn is_empty(&self) -> bool {
-        self.keys_to_slice.is_empty()
+        self.lock_free.keys_to_slice.is_empty()
     }
 
     /// Get an iterator over every ([`Key`], `&[T]`) pair
@@ -237,9 +237,7 @@ impl<T, S> ParaCord<T, S> {
 
     /// Deallocate all interned slices, but can retain some allocated memory
     pub fn clear(&mut self) {
-        self.slice_to_keys =
-            HashTable::new(0, Collector::new(), papaya::ResizeMode::Incremental(64));
-        self.keys_to_slice.clear();
+        self.lock_free.clear();
         self.alloc.shards_mut().iter_mut().for_each(|s| {
             drop(core::mem::take(s.get_mut()));
         });
@@ -257,12 +255,12 @@ impl<T, S> ParaCord<T, S> {
         };
 
         // no way to get capacity, so let's just round up.
-        let keys_size =
-            self.keys_to_slice.count().next_power_of_two() * core::mem::size_of::<InternedPtr<T>>();
+        let keys_size = self.lock_free.keys_to_slice.count().next_power_of_two()
+            * core::mem::size_of::<InternedPtr<T>>();
 
         // no way to get capacity, so let's just round up.
-        let map_size =
-            self.slice_to_keys.len().next_power_of_two() * (1 + size_of::<*const InternedPtr<T>>());
+        let map_size = self.lock_free.slice_to_keys.len().next_power_of_two()
+            * (1 + size_of::<*const InternedPtr<T>>());
 
         size_of::<Self>() + keys_size + shards_size + map_size
     }
@@ -273,18 +271,11 @@ impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<
 {
     fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
         let iter = iter.into_iter();
-        let len = iter.size_hint().0;
-
         let mut this = Self {
-            keys_to_slice: boxcar::Vec::with_capacity(len),
+            lock_free: LockFreeParacord::with_capacity_and_hasher(iter.size_hint().0, S::default()),
             alloc: ClashCollection::default(),
-            slice_to_keys: HashTable::new(
-                len,
-                Collector::new(),
-                papaya::ResizeMode::Incremental(64),
-            ),
-            hasher: S::default(),
         };
+
         this.extend(iter);
         this
     }
@@ -293,43 +284,21 @@ impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher + Default> FromIterator<
 impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I> for ParaCord<T, S> {
     fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
         // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
+        let guard = self.lock_free.slice_to_keys.guard();
         for s in iter {
             let s = s.as_ref();
-            let hash = self.hasher.hash_one(s);
-            self.intern_slow_mut(s, hash);
-        }
-    }
-}
 
-impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for crate::ParaCord<S> {
-    fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
-        let iter = iter.into_iter();
-        let len = iter.size_hint().0;
+            let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
 
-        let mut this = Self {
-            inner: ParaCord {
-                keys_to_slice: boxcar::Vec::with_capacity(len),
-                slice_to_keys: HashTable::new(
-                    len,
-                    Collector::new(),
-                    papaya::ResizeMode::Incremental(64),
-                ),
-                alloc: ClashCollection::default(),
-                hasher: S::default(),
-            },
-        };
-        this.extend(iter);
-        this
-    }
-}
+            let hash = self.lock_free.hasher.hash_one(s);
 
-impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
-    fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
-        // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
-        for s in iter {
-            let s = s.as_ref().as_bytes();
-            let hash = self.inner.hasher.hash_one(s);
-            self.inner.intern_slow_mut(s, hash);
+            // for better compaction, use only 1 of the allocator shards.
+            // we don't need the consistency or contention guarantees in this scenario.
+            let alloc = self.alloc.get_mut(0);
+
+            if self.lock_free.find(s, hash, &guard).is_none() {
+                self.lock_free.insert(alloc.alloc(s), hash, &guard);
+            }
         }
     }
 }
@@ -354,9 +323,8 @@ pub(crate) mod iter_private {
         type Item = (Key, &'a [T]);
 
         fn next(&mut self) -> Option<Self::Item> {
-            let (key, s) = self.inner.next()?;
-            // SAFETY: we assume the key is correct given its existence in the set
-            Some(unsafe { (Key::new_unchecked(key as u32), s.slice()) })
+            let (_, s) = self.inner.next()?;
+            Some((s.key, s.slice()))
         }
     }
 }
@@ -367,7 +335,7 @@ impl<'a, T, S> IntoIterator for &'a ParaCord<T, S> {
 
     fn into_iter(self) -> Self::IntoIter {
         iter_private::Iter {
-            inner: self.keys_to_slice.iter(),
+            inner: self.lock_free.keys_to_slice.iter(),
         }
     }
 }

@@ -1,11 +1,8 @@
-use std::hash::{BuildHasher, Hash};
 use std::mem::MaybeUninit;
 
-use papaya::table::{HashTable, InsertResult, VerifiedGuard};
 use sync_wrapper::SyncWrapper;
 use typed_arena::Arena;
 
-use crate::slice::{find, NoDealloc, ParaCord};
 use crate::Key;
 
 pub(super) struct Alloc<T>(SyncWrapper<Arena<T>>);
@@ -39,7 +36,7 @@ unsafe impl<T: Sync> Sync for InternedPtr<T> {}
 unsafe impl<T: Sync> Send for InternedPtr<T> {}
 
 impl<T> InternedPtr<T> {
-    fn new(s: &[T], key: Key) -> Self {
+    pub(super) fn new(s: &[T], key: Key) -> Self {
         let len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
         Self {
             len,
@@ -56,7 +53,7 @@ impl<T> InternedPtr<T> {
 
 impl<T: Copy> Alloc<T> {
     #[inline]
-    fn alloc(&mut self, s: &[T]) -> &mut [T] {
+    pub(super) fn alloc(&mut self, s: &[T]) -> &mut [T] {
         /// Polyfill for [`MaybeUninit::copy_from_slice`]
         fn copy_from_slice<'a, T: Copy>(this: &'a mut [MaybeUninit<T>], src: &[T]) -> &'a mut [T] {
             let uninit_src: &[MaybeUninit<T>] =
@@ -81,80 +78,5 @@ impl<T: Copy> Alloc<T> {
         // Safety: we are making sure to init all the elements without panicking.
         let uninit = unsafe { arena.alloc_uninitialized(s.len()) };
         copy_from_slice(uninit, s)
-    }
-}
-
-impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
-    #[cold]
-    pub(super) fn intern_slow(&self, s: &[T], hash: u64, guard: &impl VerifiedGuard) -> Key {
-        let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
-
-        let alloc = &mut *self.alloc.get_write_shard(hash);
-
-        intern_inner_locked(
-            &self.slice_to_keys,
-            &self.keys_to_slice,
-            alloc,
-            &self.hasher,
-            s,
-            hash,
-            guard,
-        )
-    }
-
-    #[cold]
-    pub(super) fn intern_slow_mut(&mut self, s: &[T], hash: u64) -> Key {
-        let _len = u32::try_from(s.len()).expect("slice lengths must be less than u32::MAX");
-
-        let alloc = &mut *self.alloc.get_mut(hash);
-        let guard = self.slice_to_keys.guard();
-
-        intern_inner_locked(
-            &self.slice_to_keys,
-            &self.keys_to_slice,
-            alloc,
-            &self.hasher,
-            s,
-            hash,
-            &guard,
-        )
-    }
-}
-
-fn intern_inner_locked<T: Hash + Eq + Copy, S: BuildHasher>(
-    slice_to_keys: &HashTable<InternedPtr<T>, NoDealloc>,
-    keys_to_slice: &boxcar::Vec<InternedPtr<T>>,
-    alloc: &mut Alloc<T>,
-    h: &S,
-    s: &[T],
-    hash: u64,
-    guard: &impl VerifiedGuard,
-) -> Key {
-    if let Some(key) = find(slice_to_keys, s, hash, guard) {
-        return key;
-    }
-
-    let key = keys_to_slice.push_with(|key| {
-        let key = Key::from_index(key);
-        let s = alloc.alloc(s);
-        InternedPtr::new(s, key)
-    });
-    // safety: we have just inserted this entry
-    let entry = unsafe { keys_to_slice.get_unchecked(key) };
-
-    // safety: k is allocated correct
-    let eq = |k: *mut InternedPtr<T>| unsafe { s == (*k).slice() };
-    // safety: k is allocated correct
-    let hasher = |k: *mut InternedPtr<T>| unsafe { h.hash_one((*k).slice()) };
-
-    let k = entry as *const InternedPtr<T> as *mut InternedPtr<T>;
-    let res = slice_to_keys.insert(hash, k, eq, hasher, false, guard);
-
-    match res {
-        InsertResult::Inserted => Key::from_index(key),
-        InsertResult::Replaced(_) => unreachable!("we do not replace"),
-        InsertResult::Error(_) => unreachable!(
-            "while holding the lock, we checked for this entry already and it was not in there"
-        ),
     }
 }
