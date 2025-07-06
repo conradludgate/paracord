@@ -303,34 +303,6 @@ impl<T: Hash + Eq + Copy, I: AsRef<[T]>, S: BuildHasher> Extend<I> for ParaCord<
     }
 }
 
-impl<I: AsRef<str>, S: BuildHasher + Default> FromIterator<I> for crate::ParaCord<S> {
-    fn from_iter<A: IntoIterator<Item = I>>(iter: A) -> Self {
-        let iter = iter.into_iter();
-        let len = iter.size_hint().0;
-
-        let mut this = Self {
-            inner: ParaCord {
-                keys_to_slice: boxcar::Vec::with_capacity(len),
-                slice_to_keys: ClashCollection::default(),
-                hasher: S::default(),
-            },
-        };
-        this.extend(iter);
-        this
-    }
-}
-
-impl<I: AsRef<str>, S: BuildHasher> Extend<I> for crate::ParaCord<S> {
-    fn extend<A: IntoIterator<Item = I>>(&mut self, iter: A) {
-        // assumption, the iterator has mostly unique entries, thus this should always use the slow insert mode.
-        for s in iter {
-            let s = s.as_ref().as_bytes();
-            let hash = self.inner.hasher.hash_one(s);
-            self.inner.intern_slow_mut(s, hash);
-        }
-    }
-}
-
 impl<T: Hash + Eq + Copy, S: BuildHasher> Index<Key> for ParaCord<T, S> {
     type Output = [T];
 
