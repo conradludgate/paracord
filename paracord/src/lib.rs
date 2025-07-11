@@ -529,7 +529,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
-    use crate::{DefaultKey, Key, ParaCord};
+    use crate::{Key, ParaCord};
 
     #[test]
     fn works() {
@@ -568,6 +568,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn get_or_intern_threaded() {
         const THREADS: usize = 10;
 
@@ -804,7 +805,7 @@ mod tests {
     #[test]
     #[cfg(feature = "serde")]
     fn serde() {
-        let key = DefaultKey::new("hello");
+        let key = crate::DefaultKey::new("hello");
 
         serde_test::assert_de_tokens(&key, &[serde_test::Token::Str("hello")]);
         serde_test::assert_ser_tokens(&key, &[serde_test::Token::Str("hello")]);

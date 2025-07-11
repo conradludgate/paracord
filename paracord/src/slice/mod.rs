@@ -75,8 +75,8 @@ mod alloc;
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
-    keys_to_slice: boxcar::Vec<InternedPtr<T>>,
     slice_to_keys: ClashCollection<Collection<T>>,
+    keys_to_slice: boxcar::Vec<InternedPtr<T>>,
     hasher: S,
 }
 
@@ -91,8 +91,10 @@ struct Collection<T> {
     alloc: Alloc<T>,
 }
 
-unsafe impl<T: Sync> Sync for Collection<T> {}
-unsafe impl<T: Sync> Send for Collection<T> {}
+// Safety: no pointers are accessed without synchronisation.
+unsafe impl<T: Sync, S: Sync> Sync for ParaCord<T, S> {}
+// Safety: ParaCord only allows extracting `&[T]`, so it is find with `T: Sync` only.
+unsafe impl<T: Sync, S: Send> Send for ParaCord<T, S> {}
 
 impl<T> Default for Collection<T> {
     fn default() -> Self {
