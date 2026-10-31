@@ -75,7 +75,15 @@ mod alloc;
 /// assert_eq!(paracord.resolve(bar), &[5,6,7,8]);
 /// ```
 pub struct ParaCord<T, S = foldhash::fast::RandomState> {
+    // Safety invariant (storage): each table pointer addresses an initialized,
+    // immovable keys_to_slice entry belonging to this interner. That entry's
+    // slice is initialized, immutable arena storage owned by its shard. Only
+    // Copy elements can be inserted. Borrowing self keeps both storage levels
+    // live; clear requires &mut self and invalidates all metadata before arenas
+    // are released. Teardown never dereferences discarded raw metadata.
     slice_to_keys: ClashCollection<Collection<T>>,
+    // Safety invariant: every initialized entry satisfies the storage invariant
+    // above, whether or not it has been published in the shard's table yet.
     keys_to_slice: boxcar::Vec<InternedPtr<T>>,
     hasher: S,
 }
@@ -91,9 +99,17 @@ struct Collection<T> {
     alloc: Alloc<T>,
 }
 
-// Safety: no pointers are accessed without synchronisation.
+// SAFETY: The storage invariant ties raw table pointers and slice allocations
+// to this interner. Shared mutation of tables/arenas holds the shard write lock;
+// boxcar publishes initialized, address-stable metadata. Exposed slices are
+// immutable and T: Sync permits their shared reads. S: Sync covers shared hash
+// access. Exclusive clear/drop cannot overlap borrows of self.
 unsafe impl<T: Sync, S: Sync> Sync for ParaCord<T, S> {}
-// Safety: ParaCord only allows extracting `&[T]`, so it is find with `T: Sync` only.
+// SAFETY: Moving self retains ownership of the same arena allocations and
+// metadata. Populated arenas contain only Copy elements, so teardown runs no
+// caller-controlled T destructors on the destination thread; non-Copy T can
+// only occur in an empty interner. Resolved values are shared slices, whose
+// cross-thread access requires T: Sync. S: Send covers ownership of the hasher.
 unsafe impl<T: Sync, S: Send> Send for ParaCord<T, S> {}
 
 impl<T> Default for Collection<T> {
@@ -152,7 +168,9 @@ impl<T: Hash + Eq, S: BuildHasher> ParaCord<T, S> {
         let hash = self.hasher.hash_one(s);
         let shard = self.slice_to_keys.get_read_shard(hash);
 
-        // safety: k is allocated correct
+        // SAFETY: The storage invariant keeps table pointers and their arena
+        // slices live. The read guard prevents table mutation, while &self
+        // excludes clear/drop for every slice borrow made by the callback.
         let eq = |k: &*const InternedPtr<T>| unsafe { s == (**k).slice() };
         // safety: k is allocated correct
         let map = |k: &*const InternedPtr<T>| unsafe { (**k).key };
@@ -182,7 +200,9 @@ impl<T: Hash + Eq + Copy, S: BuildHasher> ParaCord<T, S> {
         let hash = self.hasher.hash_one(s);
 
         let key = {
-            // safety: k is allocated correct
+            // SAFETY: The storage invariant keeps table pointers and arena
+            // slices live. The read guard below protects the table lookup and
+            // &self excludes clear/drop while its callback borrows a slice.
             let eq = |k: &*const InternedPtr<T>| unsafe { s == (**k).slice() };
             // safety: k is allocated correct
             let map = |k: &*const InternedPtr<T>| unsafe { (**k).key };
@@ -206,7 +226,9 @@ impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// as well.
     pub fn try_resolve(&self, key: Key) -> Option<&[T]> {
         let s = self.keys_to_slice.get(key.into_repr() as usize)?;
-        Some(s.slice())
+        // SAFETY: s is initialized metadata from this interner. The storage
+        // invariant keeps its immutable arena allocation live for &self.
+        Some(unsafe { s.slice() })
     }
 
     /// Resolve the slice associated with this [`Key`].
@@ -216,7 +238,10 @@ impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// a different [`ParaCord`] instance, but it might return an arbitrary slice
     /// as well.
     pub fn resolve(&self, key: Key) -> &[T] {
-        self.keys_to_slice[key.into_repr() as usize].slice()
+        let s = &self.keys_to_slice[key.into_repr() as usize];
+        // SAFETY: Checked indexing selects initialized metadata owned by self;
+        // its immutable arena slice remains live for this shared owner borrow.
+        unsafe { s.slice() }
     }
 
     /// Resolve the slice associated with this [`Key`].
@@ -225,8 +250,14 @@ impl<T: Hash + Eq, S> ParaCord<T, S> {
     /// This key must have been allocated in this paracord instance,
     /// and [`ParaCord::clear`] must not have been called.
     pub unsafe fn resolve_unchecked(&self, key: Key) -> &[T] {
-        // Safety: If the key was allocated in self, then key is inbounds.
-        unsafe { self.keys_to_slice.get_unchecked(key.into_repr() as usize) }.slice()
+        // SAFETY: The caller's key contract supplies an initialized entry in
+        // this interner. Its storage invariant retains the immutable arena
+        // allocation for the returned borrow of self.
+        unsafe {
+            self.keys_to_slice
+                .get_unchecked(key.into_repr() as usize)
+                .slice()
+        }
     }
 }
 
@@ -249,6 +280,8 @@ impl<T, S> ParaCord<T, S> {
 
     /// Deallocate all interned slices, but can retain some allocated memory
     pub fn clear(&mut self) {
+        // Invalidate metadata before releasing arenas. Exclusive access prevents
+        // any resolved slices or iterators from remaining in use across clear.
         self.keys_to_slice.clear();
         self.slice_to_keys.shards_mut().iter_mut().for_each(|s| {
             s.get_mut().table.clear();
@@ -325,7 +358,10 @@ pub(crate) mod iter_private {
 
         fn next(&mut self) -> Option<Self::Item> {
             let (key, s) = self.inner.next()?;
-            // SAFETY: we assume the key is correct given its existence in the set
+            // SAFETY: Initialized entries have a key checked before allocation,
+            // so this iterator index fits Key's representation. The iterator
+            // borrows its owning interner; the storage invariant retains the
+            // initialized immutable arena slice for that same lifetime.
             Some(unsafe { (Key::new_unchecked(key as u32), s.slice()) })
         }
     }
