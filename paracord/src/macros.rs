@@ -17,6 +17,21 @@
 /// assert_eq!(key, key2);
 /// ```
 ///
+/// The declaring module cannot construct a key from an arbitrary raw index:
+///
+/// ```compile_fail
+/// paracord::custom_key!(struct LocalKey;);
+/// let key = LocalKey(paracord::Key::try_from_repr(42).unwrap());
+/// ```
+///
+/// Nor can it exchange the private representations of different key types:
+///
+/// ```compile_fail
+/// paracord::custom_key!(struct First;);
+/// paracord::custom_key!(struct Second;);
+/// let key = Second(First::new("value").0);
+/// ```
+///
 /// ## Create a custom key with a different default hasher
 ///
 /// ```
@@ -64,7 +79,7 @@ macro_rules! custom_key {
         $(#[$($meta)*])*
         #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Clone, Copy)]
         #[repr(transparent)]
-        $vis struct $key($crate::Key);
+        $vis struct $key($crate::__private::StaticKey<$key>);
 
         impl $key {
             #[inline]
@@ -77,22 +92,27 @@ macro_rules! custom_key {
             /// Returns [`None`] if not found.
             #[inline]
             pub fn try_new_existing(s: &str) -> Option<Self> {
-                Self::paracord().get(s).map(Self)
+                Self::paracord().get(s).map(|key| {
+                    // SAFETY: This key was obtained from this type's permanent interner.
+                    Self(unsafe { $crate::__private::StaticKey::new(key) })
+                })
             }
 
             /// Create a new key associated with the given string.
             /// Returns the same key if called repeatedly.
             #[inline]
             pub fn new(s: &str) -> Self {
-                Self(Self::paracord().get_or_intern(s))
+                let key = Self::paracord().get_or_intern(s);
+                // SAFETY: This key was obtained from this type's permanent interner.
+                Self(unsafe { $crate::__private::StaticKey::new(key) })
             }
 
             /// Resolve the string associated with this key.
             #[inline]
             pub fn as_str(&self) -> &'static str {
-                // Safety: The key can only be constructed from the static paracord,
-                // and the paracord will never be reset.
-                unsafe { Self::paracord().resolve_unchecked(self.0) }
+                // SAFETY: StaticKey's private representation ties this key to
+                // this type's permanent interner, even in the declaring module.
+                unsafe { Self::paracord().resolve_unchecked(self.0.key()) }
             }
 
             /// Determine how many keys have been allocated
@@ -106,7 +126,10 @@ macro_rules! custom_key {
             /// pair that has been allocated.
             #[inline]
             pub fn iter() -> impl Iterator<Item = (Self, &'static str)> {
-                Self::paracord().iter().map(|(k, s)| (Self(k), s))
+                Self::paracord().iter().map(|(key, s)| {
+                    // SAFETY: This key was obtained from this type's permanent interner.
+                    (Self(unsafe { $crate::__private::StaticKey::new(key) }), s)
+                })
             }
         }
 

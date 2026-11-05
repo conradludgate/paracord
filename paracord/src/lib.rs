@@ -98,6 +98,36 @@ mod serde {
 #[doc(hidden)]
 pub mod __private {
     pub use foldhash::fast::RandomState;
+
+    /// A key whose validity is tied to one macro-generated global key type.
+    #[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Copy)]
+    #[repr(transparent)]
+    pub struct StaticKey<T> {
+        key: crate::Key,
+        marker: std::marker::PhantomData<fn() -> T>,
+    }
+
+    impl<T> StaticKey<T> {
+        /// # Safety
+        /// `key` must come from T's permanent, macro-generated global interner.
+        pub unsafe fn new(key: crate::Key) -> Self {
+            Self {
+                key,
+                marker: std::marker::PhantomData,
+            }
+        }
+
+        pub fn key(&self) -> crate::Key {
+            self.key
+        }
+    }
+
+    impl<T> std::fmt::Debug for StaticKey<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.key.fmt(f)
+        }
+    }
+
     pub mod serde {
         pub use crate::serde::*;
     }
