@@ -73,7 +73,10 @@ macro_rules! custom_key_serde {
                 {
                     deserializer
                         .deserialize_str(SerdeVisitor(Self::paracord()))
-                        .map(Self)
+                        .map(|key| {
+                            // SAFETY: The visitor interns in this type's permanent interner.
+                            Self(unsafe { $crate::__private::StaticKey::new(key) })
+                        })
                 }
             }
         };
