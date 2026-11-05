@@ -103,7 +103,7 @@ impl<T: Copy> Alloc<T> {
         /// # Safety
         /// All elements must be initialized valid T values. The returned borrow
         /// retains the input slice's exclusive access and allocation lifetime.
-        const unsafe fn slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
+        unsafe fn slice_assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
             // SAFETY: MaybeUninit<T> and T have equal size/alignment, and the
             // slice pointer cast preserves length and allocation. The caller
             // supplies initialized valid values; the existing mutable borrow
